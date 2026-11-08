@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#090b12" />
+  <title>KBVERSE | Create your world</title>
+</head>
+<body>
+  <div id="app">
+    <header class="topbar">
+      <a class="brand" href="/">
+        <span class="brand-mark">K</span>
+        <span>KBVERSE</span>
+      </a>
+      <div class="topbar-center">WORLD EDITOR <span class="version">PREVIEW 0.2.0</span></div>
+      <div class="topbar-right"><span class="status-dot"></span> LOCAL SESSION</div>
+    </header>
+
+    <main class="workspace">
+      <aside class="sidebar">
+        <div class="panel-heading">SCENE</div>
+        <div class="scene-item active">◈ &nbsp; Untitled World</div>
+        <div class="panel-divider"></div>
+        <div class="object-heading">
+          <div class="panel-heading">OBJECTS</div>
+          <button id="add-menu" class="small-button">+ ADD</button>
+        </div>
+        <div id="object-list"></div>
+        <div class="sidebar-footer">
+          <span class="footer-label">KBVERSE ENGINE</span>
+          <span class="footer-version">Three.js · WebGL</span>
+        </div>
+      </aside>
+
+      <section class="viewport">
+        <div class="viewport-label"><span class="live-dot"></span> 3D VIEWPORT</div>
+        <div class="toolbar">
+          <button class="tool-button active" data-mode="translate" title="Move (W)">↔ <span>Move</span></button>
+          <button class="tool-button" data-mode="rotate" title="Rotate (E)">⟳ <span>Rotate</span></button>
+          <button class="tool-button" data-mode="scale" title="Scale (R)">⤢ <span>Scale</span></button>
+          <span class="toolbar-divider"></span>
+          <button id="focus-object" class="tool-button" title="Focus selected object (F)">◎ <span>Focus</span></button>
+          <button id="delete-object" class="tool-button danger" title="Delete (Delete)">⌫ <span>Delete</span></button>
+        </div>
+        <div id="scene-container"></div>
+        <div class="viewport-hint">DRAG GIZMOS TO TRANSFORM <span>·</span> RIGHT-CLICK TO ORBIT</div>
+        <div class="axis-widget"><span class="axis-y">Y</span><span class="axis-x">X</span><span class="axis-z">Z</span></div>
+      </section>
+
+      <aside class="inspector">
+        <div class="panel-heading">INSPECTOR</div>
+        <div id="empty-inspector" class="empty-inspector">
+          <span>◇</span>
+          <p>Select an object in the scene to inspect its properties.</p>
+        </div>
+        <div id="object-inspector" hidden>
+          <div class="setting-group">
+            <label>OBJECT NAME</label>
+            <input id="object-name" class="setting-input" maxlength="48" />
+          </div>
+          <div class="setting-group">
+            <label>OBJECT TYPE</label>
+            <div id="object-type" class="setting-value"></div>
+          </div>
+          <div class="setting-group">
+            <label>POSITION</label>
+            <div class="vector-fields">
+              <label>X<input id="pos-x" type="number" step="0.1"></label>
+              <label>Y<input id="pos-y" type="number" step="0.1"></label>
+              <label>Z<input id="pos-z" type="number" step="0.1"></label>
+            </div>
+          </div>
+          <div class="setting-group">
+            <label>ROTATION</label>
+            <div class="vector-fields">
+              <label>X<input id="rot-x" type="number" step="1"></label>
+              <label>Y<input id="rot-y" type="number" step="1"></label>
+              <label>Z<input id="rot-z" type="number" step="1"></label>
+            </div>
+          </div>
+          <div class="setting-group">
+            <label>SCALE</label>
+            <div class="vector-fields">
+              <label>X<input id="scale-x" type="number" min="0.01" step="0.1"></label>
+              <label>Y<input id="scale-y" type="number" min="0.01" step="0.1"></label>
+              <label>Z<input id="scale-z" type="number" min="0.01" step="0.1"></label>
+            </div>
+          </div>
+        </div>
+      </aside>
+    </main>
+
+    <footer class="statusbar">
+      <span>KBVERSE <span class="muted">/</span> WORKSPACE</span>
+      <span id="render-status">INITIALIZING VIEWPORT...</span>
+      <span>OPEN SOURCE <span class="muted">·</span> MIT</span>
+    </footer>
+  </div>
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>
