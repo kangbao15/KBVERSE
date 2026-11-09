@@ -87,10 +87,96 @@
               <label>Z<input id="scale-z" type="number" min="0.01" step="0.1"></label>
             </div>
           </div>
+
+          <div class="material-editor">
+            <div class="material-heading">MATERIAL EDITOR</div>
+
+            <div class="material-field">
+              <label>BASE COLOR</label>
+              <div class="material-color-row">
+                <input id="mat-color" type="color" value="#7c6cff">
+                <input id="mat-hex" type="text" value="#7C6CFF" maxlength="7">
+              </div>
+            </div>
+
+            <div class="material-presets">
+              <button type="button" data-material-color="#7c6cff" style="--swatch:#7c6cff"></button>
+              <button type="button" data-material-color="#e65b5b" style="--swatch:#e65b5b"></button>
+              <button type="button" data-material-color="#50b879" style="--swatch:#50b879"></button>
+              <button type="button" data-material-color="#e9bd55" style="--swatch:#e9bd55"></button>
+              <button type="button" data-material-color="#eeeeee" style="--swatch:#eeeeee"></button>
+              <button type="button" data-material-color="#303747" style="--swatch:#303747"></button>
+              <button type="button" data-material-color="#9b6b49" style="--swatch:#9b6b49"></button>
+              <button type="button" data-material-color="#59b9d8" style="--swatch:#59b9d8"></button>
+            </div>
+
+            <div class="material-field">
+              <div class="material-range-label">
+                <label for="mat-roughness">ROUGHNESS</label>
+                <output id="mat-roughness-value">0.80</output>
+              </div>
+              <input id="mat-roughness" type="range" min="0" max="1" step="0.01" value="0.8">
+            </div>
+
+            <div class="material-field">
+              <div class="material-range-label">
+                <label for="mat-metalness">METALNESS</label>
+                <output id="mat-metalness-value">0.00</output>
+              </div>
+              <input id="mat-metalness" type="range" min="0" max="1" step="0.01" value="0">
+            </div>
+
+            <div class="material-field">
+              <div class="material-range-label">
+                <label for="mat-opacity">OPACITY</label>
+                <output id="mat-opacity-value">1.00</output>
+              </div>
+              <input id="mat-opacity" type="range" min="0" max="1" step="0.01" value="1">
+            </div>
+
+            <div class="material-field">
+              <label>EMISSIVE COLOR</label>
+              <div class="material-color-row">
+                <input id="mat-emissive" type="color" value="#000000">
+                <span class="material-hint">Self illumination</span>
+              </div>
+            </div>
+
+            <label class="material-toggle">
+              <input id="mat-wireframe" type="checkbox">
+              <span>Wireframe</span>
+            </label>
+          </div>
         </div>
       </aside>
     </main>
 
+    <dialog id="asset-dialog" class="asset-dialog">
+      <div class="asset-dialog-header">
+        <div>
+          <div class="asset-title">ASSET LIBRARY</div>
+          <div class="asset-subtitle">Choose an asset to add to your world</div>
+        </div>
+        <button id="close-assets" class="asset-close" type="button">✕</button>
+      </div>
+      <div class="asset-controls">
+        <input id="asset-search" type="search" placeholder="Search assets..." />
+        <select id="asset-category">
+          <option value="all">All categories</option>
+          <option value="Buildings">Buildings</option>
+          <option value="Nature">Nature</option>
+          <option value="Vehicles">Vehicles</option>
+          <option value="Furniture">Furniture</option>
+          <option value="Props">Props</option>
+          <option value="Primitives">Primitives</option>
+        </select>
+      </div>
+      <div id="asset-grid" class="asset-grid"></div>
+      <div class="asset-dialog-footer">
+        <span id="asset-count">0 ASSETS</span>
+        <span>PROCEDURAL 3D ASSETS</span>
+      </div>
+    </dialog>
     <footer class="statusbar">
       <span>KBVERSE <span class="muted">/</span> WORKSPACE</span>
       <span id="render-status">INITIALIZING VIEWPORT...</span>
@@ -100,3 +186,5 @@
   <script type="module" src="/src/main.ts"></script>
 </body>
 </html>
+
+
