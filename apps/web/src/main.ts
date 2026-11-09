@@ -781,6 +781,67 @@ document.querySelector<HTMLInputElement>("#object-name")!.addEventListener("chan
   renderObjectList();
 });
 
+/* KBVERSE MATERIAL EVENTS FIX */
+const matColor = document.querySelector<HTMLInputElement>("#mat-color")!;
+const matHex = document.querySelector<HTMLInputElement>("#mat-hex")!;
+const matRoughness = document.querySelector<HTMLInputElement>("#mat-roughness")!;
+const matMetalness = document.querySelector<HTMLInputElement>("#mat-metalness")!;
+const matOpacity = document.querySelector<HTMLInputElement>("#mat-opacity")!;
+const matEmissive = document.querySelector<HTMLInputElement>("#mat-emissive")!;
+const matWireframe = document.querySelector<HTMLInputElement>("#mat-wireframe")!;
+
+function applyMaterialColor(value: string): void {
+    updateSelectedMaterials(material => material.color.set(value));
+    matColor.value = value;
+    matHex.value = value.toUpperCase();
+}
+
+matColor.addEventListener("input", () => {
+    applyMaterialColor(matColor.value);
+});
+
+matHex.addEventListener("input", () => {
+    const value = matHex.value.trim();
+    if (!/^#?[0-9a-fA-F]{6}$/.test(value)) return;
+    applyMaterialColor(value.startsWith("#") ? value : `#${value}`);
+});
+
+document.querySelectorAll<HTMLButtonElement>("[data-material-color]")
+    .forEach(button => {
+        button.addEventListener("click", () => {
+            const color = button.dataset.materialColor;
+            if (color) applyMaterialColor(color);
+        });
+    });
+
+matRoughness.addEventListener("input", () => {
+    const value = Number(matRoughness.value);
+    updateSelectedMaterials(material => material.roughness = value);
+    document.querySelector("#mat-roughness-value")!.textContent = value.toFixed(2);
+});
+
+matMetalness.addEventListener("input", () => {
+    const value = Number(matMetalness.value);
+    updateSelectedMaterials(material => material.metalness = value);
+    document.querySelector("#mat-metalness-value")!.textContent = value.toFixed(2);
+});
+
+matOpacity.addEventListener("input", () => {
+    const value = Number(matOpacity.value);
+    updateSelectedMaterials(material => {
+        material.opacity = value;
+        material.transparent = value < 1;
+    });
+    document.querySelector("#mat-opacity-value")!.textContent = value.toFixed(2);
+});
+
+matEmissive.addEventListener("input", () => {
+    updateSelectedMaterials(material => material.emissive.set(matEmissive.value));
+});
+
+matWireframe.addEventListener("change", () => {
+    updateSelectedMaterials(material => material.wireframe = matWireframe.checked);
+});
 for (const [prefix, property] of [
   ["pos", "position"],
   ["rot", "rotation"],
@@ -871,10 +932,13 @@ console.info("KBVERSE World Editor initialized.");
 
 
 // KBVERSE WORLD SAVE SYSTEM
+let worldName = "Untitled World";
+
 function saveWorld(): void {
     const payload = {
         app: "KBVERSE",
         version: 1,
+        name: worldName.trim() || "Untitled World",
         savedAt: new Date().toISOString(),
         objects: editableObjects.map((object) => object.toJSON())
     };
@@ -902,12 +966,20 @@ function loadWorldFile(file: File): void {
             const payload = JSON.parse(String(reader.result)) as {
                 app?: string;
                 version?: number;
+                name?: string;
                 objects?: unknown[];
             };
 
             if (!Array.isArray(payload.objects)) {
                 throw new Error("File không có danh sách objects hợp lệ.");
             }
+            worldName = typeof payload.name === "string" && payload.name.trim()
+                ? payload.name.trim().slice(0, 48)
+                : "Untitled World";
+
+            const worldNameInput = document.querySelector<HTMLInputElement>("#world-name");
+            if (worldNameInput) worldNameInput.value = worldName;
+            document.title = `${worldName} | KBVERSE`;
 
             const loader = new THREE.ObjectLoader();
 
@@ -1027,6 +1099,17 @@ function installWorldSaveControls(): void {
 }
 
 installWorldSaveControls();
+
+const worldNameInput = document.querySelector<HTMLInputElement>("#world-name")!;
+
+worldNameInput.addEventListener("input", () => {
+    worldName = worldNameInput.value.slice(0, 48).trim() || "Untitled World";
+    document.title = `${worldName} | KBVERSE`;
+});
+
+worldNameInput.addEventListener("change", () => {
+    worldNameInput.value = worldName;
+});
 
 
 // KBVERSE GLB IMPORT EXPORT

@@ -665,3 +665,12 @@ button, input { font: inherit; }
 .material-toggle input {
   accent-color: #8878ff;
 }
+
+/* KBVERSE Inspector Scroll Fix */
+.inspector {
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-width: thin;
+  scrollbar-color: #343b50 transparent;
+}
