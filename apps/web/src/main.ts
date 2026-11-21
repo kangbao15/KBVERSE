@@ -4,6 +4,7 @@ import { TransformControls } from "three/addons/controls/TransformControls.js";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { GLTFExporter } from "three/addons/exporters/GLTFExporter.js";
 import "./style.css";
+import { installSettings } from "./settings";
 
 const container = document.querySelector<HTMLDivElement>("#scene-container")!;
 const status = document.querySelector<HTMLSpanElement>("#render-status")!;
@@ -45,6 +46,7 @@ light.position.set(5, 9, 6);
 light.castShadow = true;
 light.shadow.mapSize.set(1024, 1024);
 scene.add(light);
+installSettings({ renderer, camera, scene, keyLight: light });
 
 const floor = new THREE.Mesh(
   new THREE.PlaneGeometry(200, 200),
@@ -1252,4 +1254,5 @@ function installGltfControls(): void {
 }
 
 installGltfControls();
+
 

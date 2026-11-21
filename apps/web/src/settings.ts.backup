@@ -1,0 +1,264 @@
+import * as THREE from "three";
+
+type Settings = {
+  shader: string;
+  graphics: string;
+  sound: number;
+  sfx: number;
+  viewDistance: number;
+};
+
+type SettingsOptions = {
+  renderer: THREE.WebGLRenderer;
+  camera: THREE.PerspectiveCamera;
+  scene: THREE.Scene;
+  keyLight: THREE.DirectionalLight;
+};
+
+const STORAGE_KEY = "kbverse-settings-v2";
+
+const defaults: Settings = {
+  shader: "standard",
+  graphics: "balanced",
+  sound: 70,
+  sfx: 70,
+  viewDistance: 60
+};
+
+const graphicsProfiles: Record<string, { pixelRatio: number; shadows: boolean; shadowSize: number }> = {
+  potato:   { pixelRatio: 0.65, shadows: false, shadowSize: 256 },
+  low:      { pixelRatio: 0.85, shadows: false, shadowSize: 512 },
+  balanced: { pixelRatio: 1.00, shadows: true,  shadowSize: 1024 },
+  high:     { pixelRatio: 1.35, shadows: true,  shadowSize: 1536 },
+  ultra:    { pixelRatio: 1.75, shadows: true,  shadowSize: 2048 }
+};
+
+function loadSettings(): Settings {
+  try {
+    const saved = localStorage.getItem(STORAGE_KEY);
+    return saved ? { ...defaults, ...JSON.parse(saved) } : { ...defaults };
+  } catch {
+    return { ...defaults };
+  }
+}
+
+export function installSettings(options: SettingsOptions): void {
+  const { renderer, camera, scene, keyLight } = options;
+
+  if (document.getElementById("kbverse-settings-root")) return;
+
+  let settings = loadSettings();
+
+  const style = document.createElement("style");
+  style.textContent = `
+    #kbverse-settings-root {
+      position: fixed;
+      right: 18px;
+      bottom: 18px;
+      z-index: 99999;
+      font-family: Inter, system-ui, sans-serif;
+      color: #eef3ff;
+    }
+    #kbverse-settings-toggle {
+      width: 48px;
+      height: 48px;
+      border: 1px solid #52617e;
+      border-radius: 15px;
+      background: #172238;
+      color: white;
+      font-size: 22px;
+      cursor: pointer;
+      box-shadow: 0 8px 28px #0008;
+    }
+    #kbverse-settings-panel {
+      display: none;
+      position: absolute;
+      right: 0;
+      bottom: 60px;
+      width: min(330px, calc(100vw - 36px));
+      padding: 18px;
+      border: 1px solid #34435f;
+      border-radius: 16px;
+      background: #111a2bed;
+      box-shadow: 0 14px 45px #0009;
+      backdrop-filter: blur(16px);
+    }
+    #kbverse-settings-panel.open { display: block; }
+    #kbverse-settings-panel h2 {
+      margin: 0 0 14px;
+      font-size: 17px;
+    }
+    .kb-setting { margin: 13px 0; }
+    .kb-setting label {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 7px;
+      color: #cbd6ed;
+      font-size: 12px;
+    }
+    .kb-setting select {
+      width: 100%;
+      padding: 9px;
+      border: 1px solid #3b4b69;
+      border-radius: 8px;
+      outline: none;
+      background: #202d46;
+      color: white;
+    }
+    .kb-setting input { width: 100%; accent-color: #7c9cff; }
+    #kbverse-settings-reset {
+      width: 100%;
+      margin-top: 12px;
+      padding: 10px;
+      border: 1px solid #53668c;
+      border-radius: 9px;
+      background: #263653;
+      color: white;
+      cursor: pointer;
+    }
+    #kbverse-settings-reset:hover,
+    #kbverse-settings-toggle:hover { background: #35496e; }
+    #kbverse-settings-note {
+      margin-top: 10px;
+      color: #8e9db9;
+      font-size: 10px;
+      line-height: 1.5;
+    }
+  `;
+  document.head.appendChild(style);
+
+  const root = document.createElement("div");
+  root.id = "kbverse-settings-root";
+  root.innerHTML = `
+    <section id="kbverse-settings-panel">
+      <h2>⚙ KBVERSE Settings</h2>
+
+      <div class="kb-setting">
+        <label for="kb-shader">Shader</label>
+        <select id="kb-shader" data-setting="shader">
+          <option value="off">Off</option>
+          <option value="standard">Standard</option>
+          <option value="advanced">Advanced</option>
+        </select>
+      </div>
+
+      <div class="kb-setting">
+        <label for="kb-graphics">Graphics</label>
+        <select id="kb-graphics" data-setting="graphics">
+          <option value="potato">Potato</option>
+          <option value="low">Low</option>
+          <option value="balanced">Balanced</option>
+          <option value="high">High</option>
+          <option value="ultra">Ultra</option>
+        </select>
+      </div>
+
+      <div class="kb-setting">
+        <label for="kb-sound">Sound <span id="kb-sound-value"></span></label>
+        <input id="kb-sound" data-setting="sound" type="range" min="0" max="100">
+      </div>
+
+      <div class="kb-setting">
+        <label for="kb-sfx">SFX <span id="kb-sfx-value"></span></label>
+        <input id="kb-sfx" data-setting="sfx" type="range" min="0" max="100">
+      </div>
+
+      <div class="kb-setting">
+        <label for="kb-distance">View Distance <span id="kb-distance-value"></span></label>
+        <input id="kb-distance" data-setting="viewDistance" type="range" min="10" max="100" step="5">
+      </div>
+
+      <button id="kbverse-settings-reset">Reset Defaults</button>
+      <div id="kbverse-settings-note">
+        Settings are saved automatically. Sound and SFX values are stored for the audio system integration.
+      </div>
+    </section>
+    <button id="kbverse-settings-toggle" title="Settings" aria-label="Open settings">⚙</button>
+  `;
+  document.body.appendChild(root);
+
+  const panel = root.querySelector<HTMLElement>("#kbverse-settings-panel")!;
+  const toggle = root.querySelector<HTMLButtonElement>("#kbverse-settings-toggle")!;
+
+  function apply(): void {
+    const profile = graphicsProfiles[settings.graphics] ?? graphicsProfiles.balanced;
+
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, profile.pixelRatio));
+    renderer.shadowMap.enabled = profile.shadows;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+
+    keyLight.castShadow = profile.shadows;
+    keyLight.shadow.mapSize.set(profile.shadowSize, profile.shadowSize);
+
+    if (settings.shader === "off") {
+      renderer.toneMapping = THREE.NoToneMapping;
+    } else if (settings.shader === "advanced") {
+      renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    } else {
+      renderer.toneMapping = THREE.AgXToneMapping;
+    }
+
+    renderer.toneMappingExposure = settings.shader === "advanced" ? 1.2 : 1;
+
+    camera.far = Math.max(30, settings.viewDistance * 3);
+    camera.updateProjectionMatrix();
+
+    if (scene.fog instanceof THREE.Fog) {
+      scene.fog.far = camera.far * 0.85;
+    }
+
+    root.querySelector<HTMLElement>("#kb-sound-value")!.textContent = `${settings.sound}%`;
+    root.querySelector<HTMLElement>("#kb-sfx-value")!.textContent = `${settings.sfx}%`;
+    root.querySelector<HTMLElement>("#kb-distance-value")!.textContent = `${settings.viewDistance}%`;
+  }
+
+  function updateControls(): void {
+    for (const key of ["shader", "graphics", "sound", "sfx", "viewDistance"] as const) {
+      const control = root.querySelector<HTMLInputElement | HTMLSelectElement>(`[data-setting="${key}"]`)!;
+      control.value = String(settings[key]);
+    }
+    apply();
+  }
+
+  function save(): void {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
+    apply();
+  }
+
+  root.addEventListener("input", (event: Event) => {
+    const target = event.target;
+    if (!(target instanceof HTMLInputElement)) return;
+
+    const key = target.dataset.setting as keyof Settings | undefined;
+    if (!key) return;
+
+    if (key === "sound" || key === "sfx" || key === "viewDistance") {
+      settings[key] = Number(target.value);
+      save();
+    }
+  });
+
+  root.addEventListener("change", (event: Event) => {
+    const target = event.target;
+    if (!(target instanceof HTMLSelectElement)) return;
+
+    const key = target.dataset.setting as keyof Settings | undefined;
+    if (key !== "shader" && key !== "graphics") return;
+
+    settings[key] = target.value;
+    save();
+  });
+
+  toggle.addEventListener("click", () => {
+    panel.classList.toggle("open");
+  });
+
+  root.querySelector<HTMLButtonElement>("#kbverse-settings-reset")!.addEventListener("click", () => {
+    settings = { ...defaults };
+    updateControls();
+    save();
+  });
+
+  updateControls();
+}
