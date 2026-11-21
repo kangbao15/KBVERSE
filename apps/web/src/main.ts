@@ -1463,6 +1463,8 @@ function renderAssetLibrary(): void {
 }
 
 function addAssetToScene(assetId: string): void {
+  (window as any).KBVERSEAudio?.playSfx('place');
+
   const group = createAsset(assetId);
   const definition = assetCatalog.find(asset => asset.id === assetId);
 
@@ -1478,7 +1480,8 @@ function addAssetToScene(assetId: string): void {
   editableObjects.push(group);
   selectObject(group);
   renderObjectList();
-}
+
+  setTimeout(() => void __kbSave(), 100);}
 
 function addObject(
   type: "Cube" | "Sphere" | "Plane",
@@ -2218,5 +2221,607 @@ installGltfControls();
 
 
 
+
+
+
+// KBVERSE_PERSISTENCE_V1
+const __kbDBName = "KBVERSE_DATABASE";
+const __kbStoreName = "world";
+let __kbLastSnapshot = "";
+
+function __kbOpenDB(): Promise<IDBDatabase> {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(__kbDBName, 1);
+    request.onupgradeneeded = () => {
+      const db = request.result;
+      if (!db.objectStoreNames.contains(__kbStoreName)) {
+        db.createObjectStore(__kbStoreName);
+      }
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+async function __kbWrite(key: string, value: unknown): Promise<void> {
+  const db = await __kbOpenDB();
+  await new Promise<void>((resolve, reject) => {
+    const tx = db.transaction(__kbStoreName, "readwrite");
+    tx.objectStore(__kbStoreName).put(value, key);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+  db.close();
+}
+
+async function __kbRead(key: string): Promise<any> {
+  const db = await __kbOpenDB();
+  const value = await new Promise<any>((resolve, reject) => {
+    const request = db.transaction(__kbStoreName).objectStore(__kbStoreName).get(key);
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+  db.close();
+  return value;
+}
+
+function __kbSnapshot() {
+  return scene.children
+    .filter((o: THREE.Object3D) => !!o.userData?.assetId)
+    .map((o: THREE.Object3D) => ({
+      assetId: o.userData.assetId,
+      position: o.position.toArray(),
+      rotation: o.rotation.toArray(),
+      scale: o.scale.toArray()
+    }));
+}
+
+async function __kbSave(force = false) {
+  try {
+    const objects = __kbSnapshot();
+    const snapshot = JSON.stringify(objects);
+    if (!force && snapshot === __kbLastSnapshot) return;
+    await __kbWrite("scene", objects);
+    __kbLastSnapshot = snapshot;
+    localStorage.setItem("KBVERSE_STORAGE_VERSION", "1");
+  } catch (error) {
+    console.error("[KBVERSE Storage] Save failed:", error);
+  }
+}
+
+async function __kbRestore() {
+  try {
+    const objects = await __kbRead("scene");
+    if (!Array.isArray(objects)) return;
+
+    for (const item of objects) {
+      if (typeof item.assetId !== "string") continue;
+      __kbOriginalAddAssetToScene(item.assetId);
+
+      const object = [...scene.children].reverse()
+        .find((o: THREE.Object3D) => o.userData?.assetId === item.assetId);
+
+      if (!object) continue;
+      if (Array.isArray(item.position)) object.position.fromArray(item.position);
+      if (Array.isArray(item.rotation)) object.rotation.fromArray(item.rotation);
+      if (Array.isArray(item.scale)) object.scale.fromArray(item.scale);
+    }
+
+    __kbLastSnapshot = JSON.stringify(__kbSnapshot());
+    console.info("[KBVERSE Storage] World restored:", objects.length, "objects");
+  } catch (error) {
+    console.error("[KBVERSE Storage] Restore failed:", error);
+  }
+}
+
+const __kbOriginalAddAssetToScene = addAssetToScene;
+
+const __kbStorageAPI = {
+  save: () => __kbSave(true),
+  getSetting: (key: string, fallback: string | null = null) =>
+    localStorage.getItem("KBVERSE_" + key) ?? fallback,
+  setSetting: (key: string, value: string) =>
+    localStorage.setItem("KBVERSE_" + key, value),
+  async exportBackup() {
+    await __kbSave(true);
+    const data = await __kbRead("scene");
+    const blob = new Blob([JSON.stringify({
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      scene: data
+    }, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "kbverse-backup.json";
+    link.click();
+    URL.revokeObjectURL(url);
+  },
+  async importBackup(file: File) {
+    const data = JSON.parse(await file.text());
+    if (data.version !== 1 || !Array.isArray(data.scene)) {
+      throw new Error("Invalid KBVERSE backup");
+    }
+    await __kbWrite("scene", data.scene);
+    location.reload();
+  }
+};
+
+(window as any).KBVERSEStorage = __kbStorageAPI;
+void __kbRestore();
+setInterval(() => void __kbSave(), 2000);
+window.addEventListener("beforeunload", () => {
+  void __kbSave(true);
+});
+// END KBVERSE_PERSISTENCE_V1
+
+
+
+
+// KBVERSE_AUDIO_SYSTEM_V1
+type KBVerseAudioConfig = {
+  music: boolean;
+  sfx: boolean;
+  musicVolume: number;
+  sfxVolume: number;
+};
+
+const __kbAudioDefaults: KBVerseAudioConfig = {
+  music: true,
+  sfx: true,
+  musicVolume: 0.16,
+  sfxVolume: 0.38
+};
+
+let __kbAudioConfig: KBVerseAudioConfig = { ...__kbAudioDefaults };
+
+try {
+  const saved = JSON.parse(localStorage.getItem("KBVERSE_AUDIO_SETTINGS") || "null");
+  if (saved && typeof saved === "object") {
+    __kbAudioConfig = {
+      music: typeof saved.music === "boolean" ? saved.music : true,
+      sfx: typeof saved.sfx === "boolean" ? saved.sfx : true,
+      musicVolume: Number.isFinite(saved.musicVolume)
+        ? Math.max(0, Math.min(1, saved.musicVolume)) : 0.16,
+      sfxVolume: Number.isFinite(saved.sfxVolume)
+        ? Math.max(0, Math.min(1, saved.sfxVolume)) : 0.38
+    };
+  }
+} catch {}
+
+let __kbAudioContext: AudioContext | null = null;
+let __kbMusicBus: GainNode | null = null;
+let __kbSfxBus: GainNode | null = null;
+let __kbAudioUnlocked = false;
+let __kbMusicPlaying = false;
+let __kbMusicTimer: number | undefined;
+
+function __kbSaveAudioSettings() {
+  try {
+    localStorage.setItem("KBVERSE_AUDIO_SETTINGS", JSON.stringify(__kbAudioConfig));
+  } catch (error) {
+    console.warn("[KBVERSE Audio] Cannot save settings:", error);
+  }
+}
+
+function __kbInitAudio(): AudioContext | null {
+  if (__kbAudioContext) return __kbAudioContext;
+
+  try {
+    __kbAudioContext = new AudioContext();
+    __kbMusicBus = __kbAudioContext.createGain();
+    __kbSfxBus = __kbAudioContext.createGain();
+
+    __kbMusicBus.connect(__kbAudioContext.destination);
+    __kbSfxBus.connect(__kbAudioContext.destination);
+
+    __kbApplyAudioVolumes();
+    return __kbAudioContext;
+  } catch (error) {
+    console.error("[KBVERSE Audio] Initialization failed:", error);
+    return null;
+  }
+}
+
+function __kbApplyAudioVolumes() {
+  if (!__kbAudioContext || !__kbMusicBus || !__kbSfxBus) return;
+
+  const now = __kbAudioContext.currentTime;
+  __kbMusicBus.gain.setTargetAtTime(
+    __kbAudioConfig.music ? __kbAudioConfig.musicVolume : 0,
+    now, 0.04
+  );
+  __kbSfxBus.gain.setTargetAtTime(__kbAudioConfig.sfxVolume, now, 0.04);
+}
+
+function __kbTone(
+  frequency: number,
+  start: number,
+  duration: number,
+  volume: number,
+  bus: GainNode,
+  wave: OscillatorType = "sine"
+) {
+  const ctx = __kbAudioContext;
+  if (!ctx) return;
+
+  const oscillator = ctx.createOscillator();
+  const envelope = ctx.createGain();
+
+  oscillator.type = wave;
+  oscillator.frequency.setValueAtTime(frequency, start);
+
+  envelope.gain.setValueAtTime(0.0001, start);
+  envelope.gain.exponentialRampToValueAtTime(Math.max(volume, 0.0002), start + 0.025);
+  envelope.gain.exponentialRampToValueAtTime(0.0001, start + duration);
+
+  oscillator.connect(envelope);
+  envelope.connect(bus);
+  oscillator.start(start);
+  oscillator.stop(start + duration + 0.04);
+}
+
+function __kbPlaySfx(kind: string) {
+  if (!__kbAudioConfig.sfx || !__kbAudioUnlocked) return;
+
+  const ctx = __kbInitAudio();
+  const bus = __kbSfxBus;
+  if (!ctx || !bus || ctx.state !== "running") return;
+
+  const t = ctx.currentTime + 0.01;
+
+  switch (kind) {
+    case "place":
+      __kbTone(330, t, 0.10, 0.10, bus, "triangle");
+      __kbTone(440, t + 0.07, 0.13, 0.09, bus, "triangle");
+      __kbTone(587, t + 0.14, 0.16, 0.07, bus, "sine");
+      break;
+
+    case "delete":
+      __kbTone(560, t, 0.10, 0.10, bus, "triangle");
+      __kbTone(350, t + 0.08, 0.16, 0.08, bus, "sine");
+      break;
+
+    case "open":
+      __kbTone(480, t, 0.09, 0.07, bus);
+      __kbTone(720, t + 0.07, 0.12, 0.07, bus);
+      break;
+
+    case "select":
+      __kbTone(520, t, 0.07, 0.07, bus);
+      __kbTone(780, t + 0.045, 0.09, 0.055, bus);
+      break;
+
+    default:
+      __kbTone(720, t, 0.055, 0.055, bus);
+      break;
+  }
+}
+
+const __kbChords = [
+  [261.63, 329.63, 392.00, 493.88],
+  [220.00, 261.63, 329.63, 392.00],
+  [174.61, 261.63, 329.63, 392.00],
+  [196.00, 293.66, 349.23, 440.00]
+];
+
+const __kbBass = [130.81, 110.00, 87.31, 98.00];
+const __kbMelody = [659.25, 784.00, 880.00, 784.00, 698.46, 659.25, 587.33, 523.25];
+
+function __kbMusicLoop() {
+  if (!__kbMusicPlaying || !__kbAudioConfig.music) return;
+
+  const ctx = __kbInitAudio();
+  const bus = __kbMusicBus;
+
+  if (!ctx || !bus || ctx.state !== "running") {
+    __kbMusicTimer = window.setTimeout(__kbMusicLoop, 500);
+    return;
+  }
+
+  __kbApplyAudioVolumes();
+
+  const beat = 0.48;
+  const start = ctx.currentTime + 0.08;
+
+  for (let bar = 0; bar < 4; bar++) {
+    const barStart = start + bar * beat * 4;
+
+    for (const note of __kbChords[bar]) {
+      __kbTone(note, barStart, beat * 3.7, 0.025, bus, "sine");
+    }
+
+    for (let step = 0; step < 4; step++) {
+      __kbTone(
+        __kbBass[bar],
+        barStart + step * beat,
+        beat * 0.72,
+        0.055,
+        bus,
+        "triangle"
+      );
+    }
+  }
+
+  for (let i = 0; i < __kbMelody.length; i++) {
+    __kbTone(
+      __kbMelody[i],
+      start + i * beat * 2 + 0.2,
+      0.24,
+      0.026,
+      bus,
+      "triangle"
+    );
+  }
+
+  __kbMusicTimer = window.setTimeout(
+    __kbMusicLoop,
+    beat * 16 * 1000 - 120
+  );
+}
+
+function __kbStartMusic() {
+  if (!__kbAudioConfig.music || __kbMusicPlaying) return;
+
+  const ctx = __kbInitAudio();
+  if (!ctx) return;
+
+  __kbMusicPlaying = true;
+  void ctx.resume().then(() => {
+    if (__kbMusicPlaying) __kbMusicLoop();
+  });
+}
+
+function __kbStopMusic() {
+  __kbMusicPlaying = false;
+
+  if (__kbMusicTimer !== undefined) {
+    window.clearTimeout(__kbMusicTimer);
+    __kbMusicTimer = undefined;
+  }
+
+  __kbApplyAudioVolumes();
+}
+
+function __kbUnlockAudio() {
+  if (__kbAudioUnlocked) return;
+
+  __kbAudioUnlocked = true;
+  const ctx = __kbInitAudio();
+
+  if (ctx) {
+    void ctx.resume().then(() => {
+      if (__kbAudioConfig.music) __kbStartMusic();
+    });
+  }
+}
+
+document.addEventListener("pointerdown", __kbUnlockAudio, {
+  once: true,
+  capture: true
+});
+
+document.addEventListener("keydown", __kbUnlockAudio, {
+  once: true,
+  capture: true
+});
+
+// SFX cho nút bấm và thao tác giao diện
+document.addEventListener("click", (event: MouseEvent) => {
+  const target = event.target as HTMLElement | null;
+  if (!target || target.closest("#kbverse-audio-panel")) return;
+
+  const control = target.closest(
+    "button, [role='button'], .asset-card, .asset-item, .tool-button"
+  ) as HTMLElement | null;
+
+  if (!control) return;
+
+  const label = (
+    (control.getAttribute("aria-label") || "") + " " +
+    (control.getAttribute("title") || "") + " " +
+    (control.textContent || "")
+  ).toLowerCase();
+
+  if (/delete|remove|trash|xóa|xoá/.test(label)) {
+    __kbPlaySfx("delete");
+  } else if (/open|menu|setting|cài đặt/.test(label)) {
+    __kbPlaySfx("open");
+  } else if (/asset|select|chọn/.test(label)) {
+    __kbPlaySfx("select");
+  } else {
+    __kbPlaySfx("click");
+  }
+}, true);
+
+document.addEventListener("keydown", (event: KeyboardEvent) => {
+  const target = event.target as HTMLElement | null;
+  const editing = target?.closest("input, textarea, select, [contenteditable='true']");
+  if (!editing && (event.key === "Delete" || event.key === "Backspace")) {
+    __kbPlaySfx("delete");
+  }
+}, true);
+
+// KBVERSE_AUDIO_SETTINGS_INTEGRATION
+
+function __kbFindSettingsHost(): HTMLElement | null {
+  const elements = Array.from(
+    document.querySelectorAll<HTMLElement>("body *")
+  );
+
+  const candidates: { element: HTMLElement; score: number; area: number }[] = [];
+
+  for (const el of elements) {
+    if (el.closest("#kbverse-audio-settings")) continue;
+
+    const rect = el.getBoundingClientRect();
+    if (rect.width < 220 || rect.height < 120) continue;
+
+    const style = getComputedStyle(el);
+    if (style.display === "none" || style.visibility === "hidden") continue;
+
+    const key = (
+      el.id + " " +
+      (typeof el.className === "string" ? el.className : "")
+    ).toLowerCase();
+
+    const headings = Array.from(
+      el.querySelectorAll<HTMLElement>("h1,h2,h3,[role='heading']")
+    ).map(h => h.innerText || "").join(" ");
+
+    const text = (
+      (el.getAttribute("aria-label") || "") + " " +
+      headings + " " +
+      (el.innerText || "").slice(0, 300)
+    ).toLowerCase();
+
+    const settings = /settings|cài đặt|cai dat|tùy chỉnh|tuy chinh/.test(text);
+    const panelClass = /settings|setting|modal|dialog|drawer|panel/.test(key);
+    const dialog = el.getAttribute("role") === "dialog" ||
+      el.tagName === "DIALOG";
+
+    if (!settings && !panelClass && !dialog) continue;
+
+    const hasControls = !!el.querySelector(
+      "input,button,select,[role='button']"
+    );
+    if (!hasControls && !dialog) continue;
+
+    const area = rect.width * rect.height;
+    const viewportArea = window.innerWidth * window.innerHeight;
+    if (area > viewportArea * 0.95 && !dialog && !/modal|settings/.test(key)) {
+      continue;
+    }
+
+    let score = 0;
+    if (/settings|setting/.test(key)) score += 30;
+    if (/modal|dialog|drawer/.test(key) || dialog) score += 20;
+    if (settings) score += 15;
+    if (headings.length > 0) score += 5;
+    score -= Math.log2(area + 1) * 0.15;
+
+    candidates.push({ element: el, score, area });
+  }
+
+  candidates.sort((a, b) =>
+    b.score - a.score || a.area - b.area
+  );
+
+  return candidates[0]?.element ?? null;
+}
+
+function __kbAttachAudioSettings() {
+  const host = __kbFindSettingsHost();
+  if (!host) return;
+
+  let section = document.getElementById(
+    "kbverse-audio-settings"
+  ) as HTMLElement | null;
+
+  if (section?.parentElement === host) return;
+  section?.remove();
+
+  section = document.createElement("section");
+  section.id = "kbverse-audio-settings";
+  section.style.cssText =
+    "margin:16px 0;padding:14px;border:1px solid rgba(150,140,255,.28);" +
+    "border-radius:10px;background:rgba(120,110,255,.06);" +
+    "display:grid;gap:12px;color:inherit;";
+
+  section.innerHTML = `
+    <div style="font-weight:700;font-size:14px">ÂM THANH</div>
+
+    <label style="display:flex;align-items:center;justify-content:space-between;gap:12px">
+      <span>Nhạc nền (BGM)</span>
+      <input id="kb-audio-music" type="checkbox">
+    </label>
+
+    <label style="display:flex;align-items:center;justify-content:space-between;gap:12px">
+      <span>Hiệu ứng (SFX)</span>
+      <input id="kb-audio-sfx" type="checkbox">
+    </label>
+
+    <label style="display:grid;gap:6px">
+      <span>Âm lượng nhạc</span>
+      <input id="kb-audio-music-volume" type="range" min="0" max="1" step="0.01">
+    </label>
+
+    <label style="display:grid;gap:6px">
+      <span>Âm lượng hiệu ứng</span>
+      <input id="kb-audio-sfx-volume" type="range" min="0" max="1" step="0.01">
+    </label>
+  `;
+
+  host.appendChild(section);
+
+  const music = section.querySelector<HTMLInputElement>(
+    "#kb-audio-music"
+  )!;
+  const sfx = section.querySelector<HTMLInputElement>(
+    "#kb-audio-sfx"
+  )!;
+  const musicVolume = section.querySelector<HTMLInputElement>(
+    "#kb-audio-music-volume"
+  )!;
+  const sfxVolume = section.querySelector<HTMLInputElement>(
+    "#kb-audio-sfx-volume"
+  )!;
+
+  music.checked = __kbAudioConfig.music;
+  sfx.checked = __kbAudioConfig.sfx;
+  musicVolume.value = String(__kbAudioConfig.musicVolume);
+  sfxVolume.value = String(__kbAudioConfig.sfxVolume);
+
+  music.addEventListener("change", () => {
+    __kbAudioConfig.music = music.checked;
+    __kbSaveAudioSettings();
+
+    if (music.checked) {
+      __kbUnlockAudio();
+      __kbStartMusic();
+    } else {
+      __kbStopMusic();
+    }
+
+    __kbApplyAudioVolumes();
+  });
+
+  sfx.addEventListener("change", () => {
+    __kbAudioConfig.sfx = sfx.checked;
+    __kbSaveAudioSettings();
+  });
+
+  musicVolume.addEventListener("input", () => {
+    __kbAudioConfig.musicVolume = Number(musicVolume.value);
+    __kbSaveAudioSettings();
+    __kbApplyAudioVolumes();
+  });
+
+  sfxVolume.addEventListener("input", () => {
+    __kbAudioConfig.sfxVolume = Number(sfxVolume.value);
+    __kbSaveAudioSettings();
+    __kbApplyAudioVolumes();
+  });
+}
+
+const __kbSettingsObserver = new MutationObserver(() => {
+  __kbAttachAudioSettings();
+});
+
+__kbSettingsObserver.observe(document.body, {
+  childList: true,
+  subtree: true,
+  attributes: true,
+  attributeFilter: ["class", "style", "aria-hidden"]
+});
+
+document.addEventListener("click", () => {
+  setTimeout(__kbAttachAudioSettings, 100);
+}, true);
+
+__kbAttachAudioSettings();
+
+// END KBVERSE_AUDIO_SETTINGS_INTEGRATION
+// END KBVERSE_AUDIO_SYSTEM_V1
 
 
