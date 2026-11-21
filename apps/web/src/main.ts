@@ -1,3 +1,4 @@
+import { initKBLoader } from './kb-loader';
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { TransformControls } from "three/addons/controls/TransformControls.js";
@@ -2824,4 +2825,8 @@ __kbAttachAudioSettings();
 // END KBVERSE_AUDIO_SETTINGS_INTEGRATION
 // END KBVERSE_AUDIO_SYSTEM_V1
 
+
+
+// KBVERSE_MOD_LOADER_BOOT_V1
+void initKBLoader({ appVersion: '2.0.0', scene: scene });
 

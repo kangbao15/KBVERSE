@@ -1,0 +1,14 @@
+{
+  "manifest": {
+    "id": "hello-world",
+    "name": "Hello World",
+    "version": "1.0.0",
+    "apiVersion": 1,
+    "author": "KBVERSE",
+    "description": "Example mod using KB Loader API v1",
+    "minKBVersion": "2.0.0",
+    "dependencies": [],
+    "permissions": ["notifications", "commands", "scene.write", "storage"]
+  },
+  "source": "kb.log('Hello from KBVERSE!');\nkb.registerCommand({ id: 'hello', title: 'Say Hello' }, () => kb.notify('Hello from my first KBVERSE mod!'));\n(async () => { const id = await kb.scene.addPrimitive({ type: 'box', name: 'Hello World Cube', color: '#7c6cff', position: [0, 1, 0], size: [1, 1, 1] }); await kb.storage.set('lastObject', id); })();"
+}
