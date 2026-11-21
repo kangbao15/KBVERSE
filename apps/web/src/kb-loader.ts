@@ -121,11 +121,11 @@ async function getValue<T>(store: string, key: IDBValidKey): Promise<T | undefin
   });
 }
 
-async function putValue(store: string, key: IDBValidKey, value: unknown): Promise<void> {
+async function putValue(store: string, key: IDBValidKey | undefined, value: unknown): Promise<void> {
   const db = await openDB();
   await new Promise<void>((resolve, reject) => {
     const tx = db.transaction(store, "readwrite");
-    tx.objectStore(store).put(value, key);
+    if (key !== undefined) tx.objectStore(store).put(value, key); else tx.objectStore(store).put(value);
     tx.oncomplete = () => resolve();
     tx.onerror = () => reject(tx.error);
     tx.onabort = () => reject(tx.error);
@@ -156,7 +156,7 @@ async function getMod(id: string): Promise<StoredMod | undefined> {
 }
 
 async function saveMod(mod: StoredMod): Promise<void> {
-  await putValue(MODS, mod.manifest.id, mod);
+  await putValue(MODS, undefined, mod);
 }
 
 function compareVersions(a: string, b: string): number {
