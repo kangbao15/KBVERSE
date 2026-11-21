@@ -1,3 +1,4 @@
+import { initKBPlay } from './kb-play';
 import { initKBLoader } from './kb-loader';
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
@@ -2829,4 +2830,8 @@ __kbAttachAudioSettings();
 
 // KBVERSE_MOD_LOADER_BOOT_V1
 void initKBLoader({ appVersion: '2.0.0', scene: scene });
+
+
+// KBVERSE_PLAY_MODE_V1
+initKBPlay({ scene: scene, camera: camera, renderer: renderer, controls: orbit });
 
