@@ -28,11 +28,17 @@ type StoredMod = {
   grantedPermissions: Permission[];
 };
 
+type PrimitiveType = "box" | "sphere" | "cylinder" | "cone" | "torus" | "plane";
+
 type PrimitiveRecord = {
   id: string;
-  type: "box" | "sphere" | "cylinder" | "cone";
+  type: PrimitiveType;
   name: string;
   color: string;
+  opacity?: number;
+  wireframe?: boolean;
+  roughness?: number;
+  metalness?: number;
   position: number[];
   rotation: number[];
   scale: number[];
@@ -56,6 +62,7 @@ const DB_VERSION = 1;
 const MODS = "mods";
 const DATA = "data";
 const API_VERSION = 1;
+const MAX_SOURCE_BYTES = 256000;
 
 const allowedPermissions = new Set<Permission>([
   "scene.read",
@@ -64,6 +71,15 @@ const allowedPermissions = new Set<Permission>([
   "storage",
   "notifications",
   "commands"
+]);
+
+const supportedPrimitives = new Set<PrimitiveType>([
+  "box",
+  "sphere",
+  "cylinder",
+  "cone",
+  "torus",
+  "plane"
 ]);
 
 let dbPromise: Promise<IDBDatabase> | null = null;
@@ -98,11 +114,8 @@ function openDB(): Promise<IDBDatabase> {
 
 async function getValue<T>(store: string, key: IDBValidKey): Promise<T | undefined> {
   const db = await openDB();
-
   return new Promise((resolve, reject) => {
-    const request = db.transaction(store, "readonly")
-      .objectStore(store).get(key);
-
+    const request = db.transaction(store, "readonly").objectStore(store).get(key);
     request.onsuccess = () => resolve(request.result as T | undefined);
     request.onerror = () => reject(request.error);
   });
@@ -110,7 +123,6 @@ async function getValue<T>(store: string, key: IDBValidKey): Promise<T | undefin
 
 async function putValue(store: string, key: IDBValidKey, value: unknown): Promise<void> {
   const db = await openDB();
-
   await new Promise<void>((resolve, reject) => {
     const tx = db.transaction(store, "readwrite");
     tx.objectStore(store).put(value, key);
@@ -122,12 +134,20 @@ async function putValue(store: string, key: IDBValidKey, value: unknown): Promis
 
 async function deleteValue(store: string, key: IDBValidKey): Promise<void> {
   const db = await openDB();
-
   await new Promise<void>((resolve, reject) => {
     const tx = db.transaction(store, "readwrite");
     tx.objectStore(store).delete(key);
     tx.oncomplete = () => resolve();
     tx.onerror = () => reject(tx.error);
+  });
+}
+
+async function listMods(): Promise<StoredMod[]> {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const request = db.transaction(MODS, "readonly").objectStore(MODS).getAll();
+    request.onsuccess = () => resolve(request.result as StoredMod[]);
+    request.onerror = () => reject(request.error);
   });
 }
 
@@ -139,63 +159,45 @@ async function saveMod(mod: StoredMod): Promise<void> {
   await putValue(MODS, mod.manifest.id, mod);
 }
 
-async function listMods(): Promise<StoredMod[]> {
-  const db = await openDB();
-
-  return new Promise((resolve, reject) => {
-    const request = db.transaction(MODS, "readonly")
-      .objectStore(MODS).getAll();
-
-    request.onsuccess = () => resolve(request.result as StoredMod[]);
-    request.onerror = () => reject(request.error);
-  });
-}
-
 function compareVersions(a: string, b: string): number {
   const aa = a.split(".").map(Number);
   const bb = b.split(".").map(Number);
-
   for (let i = 0; i < 3; i++) {
     const x = aa[i] || 0;
     const y = bb[i] || 0;
     if (x !== y) return x > y ? 1 : -1;
   }
-
   return 0;
 }
 
 function validatePackage(input: any): { manifest: Manifest; source: string } {
-  if (!input || typeof input !== "object") {
-    throw new Error("Goi mod khong hop le.");
-  }
-
+  if (!input || typeof input !== "object") throw new Error("Goi mod khong hop le.");
   const m = input.manifest;
   if (!m || typeof m !== "object" || typeof input.source !== "string") {
     throw new Error("Package phai co manifest va source.");
   }
-
-  if (!/^[a-z0-9][a-z0-9._-]{1,63}$/.test(m.id || "")) {
-    throw new Error("Mod ID khong hop le.");
-  }
-
-  if (!m.name || typeof m.name !== "string" || m.name.length > 80) {
+  if (!/^[a-z0-9][a-z0-9._-]{1,63}$/.test(m.id || "")) throw new Error("Mod ID khong hop le.");
+  if (!m.name || typeof m.name !== "string" || !m.name.trim() || m.name.length > 80) {
     throw new Error("Ten mod khong hop le.");
   }
+  if (!/^\d+\.\d+\.\d+$/.test(m.version || "")) throw new Error("Version phai theo dang x.y.z.");
+  if (m.apiVersion !== API_VERSION) throw new Error("Mod dung KB Loader API khong tuong thich.");
+  if (!input.source.trim()) throw new Error("Source mod khong duoc de trong.");
 
-  if (!/^\d+\.\d+\.\d+$/.test(m.version || "")) {
-    throw new Error("Version phai theo dang x.y.z.");
+  const byteSize = new TextEncoder().encode(input.source).length;
+  if (byteSize > MAX_SOURCE_BYTES) throw new Error("Source mod vuot qua gioi han 256 KB.");
+
+  if (m.description !== undefined && (typeof m.description !== "string" || m.description.length > 1000)) {
+    throw new Error("Description khong hop le.");
   }
-
-  if (m.apiVersion !== API_VERSION) {
-    throw new Error("Mod dung KB Loader API khong tuong thich.");
+  if (m.author !== undefined && (typeof m.author !== "string" || m.author.length > 100)) {
+    throw new Error("Author khong hop le.");
   }
-
-  if (input.source.length > 256000) {
-    throw new Error("Source mod vuot qua gioi han 256 KB.");
+  if (m.minKBVersion && !/^\d+\.\d+\.\d+$/.test(m.minKBVersion)) {
+    throw new Error("minKBVersion khong hop le.");
   }
 
   const permissions = Array.isArray(m.permissions) ? m.permissions : [];
-
   for (const permission of permissions) {
     if (!allowedPermissions.has(permission)) {
       throw new Error("Permission khong duoc ho tro: " + permission);
@@ -203,12 +205,11 @@ function validatePackage(input: any): { manifest: Manifest; source: string } {
   }
 
   const dependencies = Array.isArray(m.dependencies) ? m.dependencies : [];
-
   for (const dependency of dependencies) {
-    if (typeof dependency !== "string" ||
-        !/^[a-z0-9][a-z0-9._-]{1,63}$/.test(dependency)) {
+    if (typeof dependency !== "string" || !/^[a-z0-9][a-z0-9._-]{1,63}$/.test(dependency)) {
       throw new Error("Dependency khong hop le.");
     }
+    if (dependency === m.id) throw new Error("Mod khong the tu phu thuoc chinh no.");
   }
 
   return {
@@ -219,8 +220,8 @@ function validatePackage(input: any): { manifest: Manifest; source: string } {
       apiVersion: m.apiVersion,
       description: String(m.description || ""),
       author: String(m.author || "Unknown"),
-      minKBVersion: m.minKBVersion,
-      dependencies,
+      ...(m.minKBVersion ? { minKBVersion: m.minKBVersion } : {}),
+      dependencies: [...new Set(dependencies)] as string[],
       permissions: [...new Set(permissions)] as Permission[]
     },
     source: input.source
@@ -235,193 +236,245 @@ function toast(message: string): void {
     "background:#202438;color:white;padding:12px 17px;" +
     "border:1px solid #7772ff;border-radius:9px;" +
     "font:13px system-ui;max-width:340px;box-shadow:0 5px 22px #0006";
-
   document.body.appendChild(node);
   window.setTimeout(() => node.remove(), 3500);
 }
 
 function validVector(value: unknown, fallback: number[], min: number, max: number): number[] {
   if (!Array.isArray(value) || value.length !== 3) return fallback;
-
-  return value.map((v, i) => {
+  return value.map(v => {
     const n = Number(v);
-    if (!Number.isFinite(n) || n < min || n > max) {
-      throw new Error("Gia tri transform khong hop le.");
-    }
+    if (!Number.isFinite(n) || n < min || n > max) throw new Error("Gia tri transform khong hop le.");
     return n;
   });
 }
 
+function clampNumber(value: unknown, fallback: number, min: number, max: number): number {
+  if (value === undefined) return fallback;
+  const n = Number(value);
+  if (!Number.isFinite(n) || n < min || n > max) throw new Error("Gia tri thuoc tinh khong hop le.");
+  return n;
+}
+
+function emitToAll(name: string, data: unknown): void {
+  for (const runtime of runtimes.values()) {
+    runtime.iframe.contentWindow?.postMessage({
+      __kbloader: 1,
+      token: runtime.token,
+      type: "event",
+      payload: { name, data }
+    }, "*");
+  }
+}
+
+function applyMaterialStyle(material: THREE.MeshStandardMaterial, record: PrimitiveRecord): void {
+  material.color.set(record.color);
+  const opacity = record.opacity ?? 1;
+  material.opacity = opacity;
+  material.transparent = opacity < 1;
+  material.wireframe = Boolean(record.wireframe);
+  if (record.roughness !== undefined) material.roughness = record.roughness;
+  if (record.metalness !== undefined) material.metalness = record.metalness;
+  material.needsUpdate = true;
+}
+
 function makePrimitive(record: PrimitiveRecord, modId: string): THREE.Mesh {
   let geometry: THREE.BufferGeometry;
-
   switch (record.type) {
-    case "box":
-      geometry = new THREE.BoxGeometry(1, 1, 1);
-      break;
-    case "sphere":
-      geometry = new THREE.SphereGeometry(0.5, 20, 14);
-      break;
-    case "cylinder":
-      geometry = new THREE.CylinderGeometry(0.5, 0.5, 1, 20);
-      break;
-    case "cone":
-      geometry = new THREE.ConeGeometry(0.5, 1, 20);
-      break;
-    default:
-      throw new Error("Primitive type khong duoc ho tro.");
+    case "box": geometry = new THREE.BoxGeometry(1, 1, 1); break;
+    case "sphere": geometry = new THREE.SphereGeometry(0.5, 20, 14); break;
+    case "cylinder": geometry = new THREE.CylinderGeometry(0.5, 0.5, 1, 20); break;
+    case "cone": geometry = new THREE.ConeGeometry(0.5, 1, 20); break;
+    case "torus": geometry = new THREE.TorusGeometry(0.45, 0.15, 16, 32); break;
+    case "plane": geometry = new THREE.PlaneGeometry(1, 1); break;
+    default: throw new Error("Primitive type khong duoc ho tro.");
   }
 
-  const material = new THREE.MeshStandardMaterial({
-    color: record.color,
-    roughness: 0.8
-  });
+  const material = new THREE.MeshStandardMaterial({ color: record.color, roughness: 0.8 });
+  applyMaterialStyle(material, record);
 
   const mesh = new THREE.Mesh(geometry, material);
   mesh.name = record.name;
   mesh.position.fromArray(record.position);
-  mesh.rotation.fromArray([
-    record.rotation[0],
-    record.rotation[1],
-    record.rotation[2],
-    "XYZ"
-  ] as any);
+  mesh.rotation.fromArray([record.rotation[0], record.rotation[1], record.rotation[2], "XYZ"] as any);
   mesh.scale.fromArray(record.scale);
 
   mesh.userData.kbModId = modId;
   mesh.userData.kbObjectId = record.id;
   mesh.userData.kbModObject = true;
+  mesh.userData.kbPrimitiveType = record.type;
+  mesh.userData.kbColor = record.color;
+  mesh.userData.kbOpacity = record.opacity ?? 1;
+  mesh.userData.kbWireframe = Boolean(record.wireframe);
+  mesh.userData.kbRoughness = record.roughness ?? 0.8;
+  mesh.userData.kbMetalness = record.metalness ?? 0;
 
   return mesh;
 }
 
 async function saveOwnedObjects(modId: string): Promise<void> {
   const objects: PrimitiveRecord[] = [];
-
   for (const object of hostScene.children) {
-    if (object.userData?.kbModId !== modId) continue;
-
+    if (object.userData?.kbModId !== modId || !(object instanceof THREE.Mesh)) continue;
     objects.push({
       id: object.userData.kbObjectId,
-      type: object.userData.kbPrimitiveType,
+      type: object.userData.kbPrimitiveType || "box",
       name: object.name,
       color: object.userData.kbColor || "#7c6cff",
+      opacity: object.userData.kbOpacity ?? 1,
+      wireframe: Boolean(object.userData.kbWireframe),
+      roughness: object.userData.kbRoughness ?? 0.8,
+      metalness: object.userData.kbMetalness ?? 0,
       position: object.position.toArray(),
       rotation: [object.rotation.x, object.rotation.y, object.rotation.z],
       scale: object.scale.toArray()
     });
   }
-
   await putValue(DATA, "scene:" + modId, objects);
 }
 
 async function restoreOwnedObjects(modId: string): Promise<void> {
   const records = await getValue<PrimitiveRecord[]>(DATA, "scene:" + modId);
   if (!Array.isArray(records)) return;
-
   for (const record of records) {
-    const exists = hostScene.children.some(
-      object => object.userData?.kbObjectId === record.id
-    );
-
+    const exists = hostScene.children.some(o => o.userData?.kbObjectId === record.id);
     if (exists) continue;
-
-    const mesh = makePrimitive(record, modId);
-    mesh.userData.kbPrimitiveType = record.type;
-    mesh.userData.kbColor = record.color;
-    hostScene.add(mesh);
+    hostScene.add(makePrimitive(record, modId));
   }
 }
 
-function createPrimitive(modId: string, input: any): string {
-  if (!input || !["box", "sphere", "cylinder", "cone"].includes(input.type)) {
-    throw new Error("Primitive type khong hop le.");
+async function createPrimitive(modId: string, input: any): Promise<string> {
+  if (!input || !supportedPrimitives.has(input.type)) {
+    throw new Error("Primitive type khong duoc ho tro.");
   }
-
-  const color = /^#[0-9a-fA-F]{6}$/.test(input.color || "")
-    ? input.color
-    : "#7c6cff";
-
-  const scale = validVector(input.size, [1, 1, 1], 0.1, 100);
-  const position = validVector(input.position, [0, 0.5, 0], -10000, 10000);
-  const rotation = validVector(input.rotation, [0, 0, 0], -10000, 10000);
-
+  const color = /^#[0-9a-fA-F]{6}$/.test(input.color || "") ? input.color : "#7c6cff";
   const record: PrimitiveRecord = {
     id: crypto.randomUUID(),
     type: input.type,
     name: String(input.name || input.type).slice(0, 80),
     color,
-    position,
-    rotation,
-    scale
+    opacity: clampNumber(input.opacity, 1, 0.05, 1),
+    wireframe: Boolean(input.wireframe),
+    roughness: clampNumber(input.roughness, 0.8, 0, 1),
+    metalness: clampNumber(input.metalness, 0, 0, 1),
+    position: validVector(input.position, [0, 0.5, 0], -10000, 10000),
+    rotation: validVector(input.rotation, [0, 0, 0], -10000, 10000),
+    scale: validVector(input.size, [1, 1, 1], 0.05, 100)
   };
-
-  const mesh = makePrimitive(record, modId);
-  mesh.userData.kbPrimitiveType = record.type;
-  mesh.userData.kbColor = record.color;
-
-  hostScene.add(mesh);
-  void saveOwnedObjects(modId);
-
+  hostScene.add(makePrimitive(record, modId));
+  await saveOwnedObjects(modId);
+  emitToAll("scene:object-added", { modId, objectId: record.id, name: record.name, type: record.type });
   return record.id;
 }
 
-function removeOwnPrimitive(modId: string, objectId: string): boolean {
+async function removeOwnPrimitive(modId: string, objectId: string): Promise<boolean> {
   const object = hostScene.children.find(
-    item => item.userData?.kbModId === modId &&
-            item.userData?.kbObjectId === objectId
+    item => item.userData?.kbModId === modId && item.userData?.kbObjectId === objectId
   );
-
   if (!object) return false;
-
   hostScene.remove(object);
-
   if (object instanceof THREE.Mesh) {
     object.geometry.dispose();
-
-    const materials = Array.isArray(object.material)
-      ? object.material
-      : [object.material];
-
+    const materials = Array.isArray(object.material) ? object.material : [object.material];
     for (const material of materials) material.dispose();
   }
-
-  void saveOwnedObjects(modId);
+  await saveOwnedObjects(modId);
+  emitToAll("scene:object-removed", { modId, objectId });
   return true;
+}
+
+async function clearOwnPrimitives(modId: string): Promise<number> {
+  let count = 0;
+  for (const object of [...hostScene.children]) {
+    if (object.userData?.kbModId === modId && object.userData?.kbObjectId) {
+      const removed = await removeOwnPrimitive(modId, object.userData.kbObjectId);
+      if (removed) count++;
+    }
+  }
+  return count;
 }
 
 async function setOwnTransform(modId: string, objectId: string, transform: any): Promise<boolean> {
   const object = hostScene.children.find(
-    item => item.userData?.kbModId === modId &&
-            item.userData?.kbObjectId === objectId
+    item => item.userData?.kbModId === modId && item.userData?.kbObjectId === objectId
   );
-
   if (!object) return false;
-
-  if (transform.position) {
-    object.position.fromArray(
-      validVector(transform.position, [0, 0, 0], -10000, 10000)
-    );
-  }
-
+  if (transform.position) object.position.fromArray(validVector(transform.position, [0, 0, 0], -10000, 10000));
   if (transform.rotation) {
     const v = validVector(transform.rotation, [0, 0, 0], -10000, 10000);
     object.rotation.set(v[0], v[1], v[2]);
   }
-
-  if (transform.scale) {
-    object.scale.fromArray(
-      validVector(transform.scale, [1, 1, 1], 0.05, 100)
-    );
-  }
-
+  if (transform.scale) object.scale.fromArray(validVector(transform.scale, [1, 1, 1], 0.05, 100));
   await saveOwnedObjects(modId);
+  emitToAll("scene:object-updated", { modId, objectId });
   return true;
+}
+
+async function updateOwnStyle(modId: string, objectId: string, style: any): Promise<boolean> {
+  const object = hostScene.children.find(
+    item => item.userData?.kbModId === modId && item.userData?.kbObjectId === objectId
+  );
+  if (!object || !(object instanceof THREE.Mesh)) return false;
+  if (style.color !== undefined) {
+    if (!/^#[0-9a-fA-F]{6}$/.test(style.color)) throw new Error("Mau hex khong hop le.");
+    object.userData.kbColor = style.color;
+  }
+  if (style.opacity !== undefined) object.userData.kbOpacity = clampNumber(style.opacity, 1, 0.05, 1);
+  if (style.wireframe !== undefined) object.userData.kbWireframe = Boolean(style.wireframe);
+  if (style.roughness !== undefined) object.userData.kbRoughness = clampNumber(style.roughness, 0.8, 0, 1);
+  if (style.metalness !== undefined) object.userData.kbMetalness = clampNumber(style.metalness, 0, 0, 1);
+  if (style.name !== undefined) object.name = String(style.name).slice(0, 80);
+
+  if (object.material instanceof THREE.MeshStandardMaterial) {
+    applyMaterialStyle(object.material, {
+      id: object.userData.kbObjectId,
+      type: object.userData.kbPrimitiveType || "box",
+      name: object.name,
+      color: object.userData.kbColor || "#7c6cff",
+      opacity: object.userData.kbOpacity ?? 1,
+      wireframe: Boolean(object.userData.kbWireframe),
+      roughness: object.userData.kbRoughness ?? 0.8,
+      metalness: object.userData.kbMetalness ?? 0,
+      position: object.position.toArray(),
+      rotation: [object.rotation.x, object.rotation.y, object.rotation.z],
+      scale: object.scale.toArray()
+    });
+  }
+  await saveOwnedObjects(modId);
+  emitToAll("scene:object-updated", { modId, objectId });
+  return true;
+}
+
+async function cloneOwnPrimitive(modId: string, objectId: string, options: any = {}): Promise<string | null> {
+  const object = hostScene.children.find(
+    item => item.userData?.kbModId === modId && item.userData?.kbObjectId === objectId
+  );
+  if (!object || !(object instanceof THREE.Mesh)) return null;
+  const offset = validVector(options.offset, [1.5, 0, 0], -1000, 1000);
+  return createPrimitive(modId, {
+    type: object.userData.kbPrimitiveType || "box",
+    name: options.name || `${object.name} Copy`,
+    color: options.color || object.userData.kbColor || "#7c6cff",
+    opacity: options.opacity ?? object.userData.kbOpacity ?? 1,
+    wireframe: options.wireframe ?? Boolean(object.userData.kbWireframe),
+    roughness: options.roughness ?? object.userData.kbRoughness ?? 0.8,
+    metalness: options.metalness ?? object.userData.kbMetalness ?? 0,
+    position: [object.position.x + offset[0], object.position.y + offset[1], object.position.z + offset[2]],
+    rotation: [object.rotation.x, object.rotation.y, object.rotation.z],
+    size: object.scale.toArray()
+  });
 }
 
 function disposeRuntime(modId: string): void {
   const runtime = runtimes.get(modId);
   if (!runtime) return;
+
+  runtime.iframe.contentWindow?.postMessage({
+    __kbloader: 1,
+    token: runtime.token,
+    type: "event",
+    payload: { name: "mod:disabled", data: { modId } }
+  }, "*");
 
   runtime.iframe.remove();
   runtimes.delete(modId);
@@ -429,15 +482,14 @@ function disposeRuntime(modId: string): void {
   for (const object of [...hostScene.children]) {
     if (object.userData?.kbModId !== modId) continue;
     hostScene.remove(object);
-
     if (object instanceof THREE.Mesh) {
       object.geometry.dispose();
-      const materials = Array.isArray(object.material)
-        ? object.material
-        : [object.material];
+      const materials = Array.isArray(object.material) ? object.material : [object.material];
       for (const material of materials) material.dispose();
     }
   }
+
+  emitToAll("mod:disabled", { modId });
 }
 
 function createRuntime(mod: StoredMod): void {
@@ -450,7 +502,6 @@ function createRuntime(mod: StoredMod): void {
   iframe.style.cssText = "display:none;width:0;height:0;border:0";
 
   const token = crypto.randomUUID();
-
   const runtime: Runtime = {
     iframe,
     token,
@@ -460,7 +511,6 @@ function createRuntime(mod: StoredMod): void {
   };
 
   runtimes.set(id, runtime);
-
   const safeSource = mod.source.replace(/<\/script/gi, "<\\/script");
 
   iframe.srcdoc = `<!doctype html>
@@ -487,7 +537,6 @@ function createRuntime(mod: StoredMod): void {
     const requestId = ++sequence;
     pending.set(requestId, { resolve, reject });
     send("request", { requestId, action, data });
-
     setTimeout(() => {
       if (!pending.has(requestId)) return;
       pending.delete(requestId);
@@ -551,19 +600,30 @@ function createRuntime(mod: StoredMod): void {
     off: (name, callback) => {
       listeners.set(name, (listeners.get(name) || []).filter(fn => fn !== callback));
     },
+    emit: (name, data) => {
+      if (typeof name === "string" && name.trim()) {
+        send("mod-event", { name: name.slice(0, 80), data });
+      }
+    },
     storage: {
       get: key => request("storage.get", { key }),
-      set: (key, value) => request("storage.set", { key, value })
+      set: (key, value) => request("storage.set", { key, value }),
+      delete: key => request("storage.delete", { key }),
+      keys: () => request("storage.keys")
     },
     scene: {
       listObjects: () => request("scene.listObjects"),
       addPrimitive: options => request("scene.addPrimitive", options),
       removeObject: id => request("scene.removeObject", { id }),
-      setTransform: (id, transform) =>
-        request("scene.setTransform", { id, transform })
+      setTransform: (id, transform) => request("scene.setTransform", { id, transform }),
+      updateStyle: (id, style) => request("scene.updateStyle", { id, style }),
+      cloneObject: (id, options) => request("scene.cloneObject", { id, options }),
+      clearOwned: () => request("scene.clearOwned")
     }
   };
 
+  Object.freeze(kb.storage);
+  Object.freeze(kb.scene);
   Object.freeze(kb);
   window.kb = kb;
 
@@ -591,13 +651,27 @@ function reply(runtime: Runtime, requestId: number, value?: unknown, error?: str
     __kbloader: 1,
     token: runtime.token,
     type: "response",
-    payload: {
-      requestId,
-      ok: !error,
-      value,
-      error
-    }
+    payload: { requestId, ok: !error, value, error }
   }, "*");
+}
+
+async function listModStorageKeys(modId: string): Promise<string[]> {
+  const prefix = "storage:" + modId + ":";
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const keys: string[] = [];
+    const tx = db.transaction(DATA, "readonly");
+    const request = tx.objectStore(DATA).openCursor();
+    request.onsuccess = () => {
+      const cursor = request.result;
+      if (!cursor) return;
+      const keyStr = String(cursor.key);
+      if (keyStr.startsWith(prefix)) keys.push(keyStr.slice(prefix.length));
+      cursor.continue();
+    };
+    tx.oncomplete = () => resolve(keys);
+    tx.onerror = () => reject(tx.error);
+  });
 }
 
 async function handleRequest(runtime: Runtime, data: any): Promise<void> {
@@ -612,11 +686,7 @@ async function handleRequest(runtime: Runtime, data: any): Promise<void> {
         if (!hasPermission(runtime, "project.read")) throw new Error("Missing project.read permission");
         result = {
           appVersion,
-          mod: {
-            id,
-            name: runtime.manifest.name,
-            version: runtime.manifest.version
-          }
+          mod: { id, name: runtime.manifest.name, version: runtime.manifest.version }
         };
         break;
 
@@ -632,26 +702,38 @@ async function handleRequest(runtime: Runtime, data: any): Promise<void> {
         if (!hasPermission(runtime, "storage")) throw new Error("Missing storage permission");
         const key = String(data.data?.key || "");
         if (!key || key.length > 100) throw new Error("Storage key invalid");
-
         const value = data.data?.value ?? null;
         const serialized = JSON.stringify(value);
-        if (serialized.length > 64000) throw new Error("Storage value exceeds 64 KB");
-
+        if (serialized === undefined || new TextEncoder().encode(serialized).length > 64000) {
+          throw new Error("Storage value exceeds 64 KB");
+        }
         await putValue(DATA, "storage:" + id + ":" + key, value);
         result = true;
         break;
       }
 
+      case "storage.delete": {
+        if (!hasPermission(runtime, "storage")) throw new Error("Missing storage permission");
+        const key = String(data.data?.key || "");
+        if (!key || key.length > 100) throw new Error("Storage key invalid");
+        await deleteValue(DATA, "storage:" + id + ":" + key);
+        result = true;
+        break;
+      }
+
+      case "storage.keys":
+        if (!hasPermission(runtime, "storage")) throw new Error("Missing storage permission");
+        result = await listModStorageKeys(id);
+        break;
+
       case "scene.listObjects": {
         if (!hasPermission(runtime, "scene.read")) throw new Error("Missing scene.read permission");
-
         result = hostScene.children.map(object => {
-          if (!object.userData.kbObjectId) {
-            object.userData.kbObjectId = crypto.randomUUID();
-          }
+          if (!object.userData.kbObjectId) object.userData.kbObjectId = crypto.randomUUID();
           return {
             id: object.userData.kbObjectId,
             name: object.name,
+            ownedByMod: object.userData?.kbModId === id,
             position: object.position.toArray(),
             rotation: [object.rotation.x, object.rotation.y, object.rotation.z],
             scale: object.scale.toArray()
@@ -662,21 +744,32 @@ async function handleRequest(runtime: Runtime, data: any): Promise<void> {
 
       case "scene.addPrimitive":
         if (!hasPermission(runtime, "scene.write")) throw new Error("Missing scene.write permission");
-        result = createPrimitive(id, data.data);
+        result = await createPrimitive(id, data.data);
         break;
 
       case "scene.removeObject":
         if (!hasPermission(runtime, "scene.write")) throw new Error("Missing scene.write permission");
-        result = removeOwnPrimitive(id, String(data.data?.id || ""));
+        result = await removeOwnPrimitive(id, String(data.data?.id || ""));
         break;
 
       case "scene.setTransform":
         if (!hasPermission(runtime, "scene.write")) throw new Error("Missing scene.write permission");
-        result = await setOwnTransform(
-          id,
-          String(data.data?.id || ""),
-          data.data?.transform || {}
-        );
+        result = await setOwnTransform(id, String(data.data?.id || ""), data.data?.transform || {});
+        break;
+
+      case "scene.updateStyle":
+        if (!hasPermission(runtime, "scene.write")) throw new Error("Missing scene.write permission");
+        result = await updateOwnStyle(id, String(data.data?.id || ""), data.data?.style || {});
+        break;
+
+      case "scene.cloneObject":
+        if (!hasPermission(runtime, "scene.write")) throw new Error("Missing scene.write permission");
+        result = await cloneOwnPrimitive(id, String(data.data?.id || ""), data.data?.options || {});
+        break;
+
+      case "scene.clearOwned":
+        if (!hasPermission(runtime, "scene.write")) throw new Error("Missing scene.write permission");
+        result = await clearOwnPrimitives(id);
         break;
 
       default:
@@ -694,14 +787,13 @@ window.addEventListener("message", event => {
   if (!data || data.__kbloader !== 1) return;
 
   const runtime = [...runtimes.values()].find(
-    item => item.iframe.contentWindow === event.source &&
-            item.token === data.token
+    item => item.iframe.contentWindow === event.source && item.token === data.token
   );
-
   if (!runtime) return;
 
   if (data.type === "ready") {
     console.info("[KB Loader] Started:", runtime.manifest.id);
+    emitToAll("mod:enabled", { modId: runtime.manifest.id });
     return;
   }
 
@@ -723,12 +815,16 @@ window.addEventListener("message", event => {
     return;
   }
 
+  if (data.type === "mod-event") {
+    const eventName = String(data.payload?.name || "").slice(0, 80);
+    if (eventName) emitToAll("mod:" + runtime.manifest.id + ":" + eventName, data.payload?.data);
+    return;
+  }
+
   if (data.type === "command-register") {
     if (!hasPermission(runtime, "commands")) return;
-
     const commandId = String(data.payload.id || "");
     const title = String(data.payload.title || "");
-
     if (!/^[a-z0-9._-]{1,48}$/i.test(commandId) || !title) return;
     runtime.commands.set(commandId, title);
     void refreshManager();
@@ -743,9 +839,7 @@ window.addEventListener("message", event => {
 async function installPackage(input: unknown): Promise<void> {
   const validated = validatePackage(input);
   const existing = await getMod(validated.manifest.id);
-
   if (existing && !confirm("Mod da ton tai. Thay the ban hien tai?")) return;
-
   if (existing) disposeRuntime(existing.manifest.id);
 
   const mod: StoredMod = {
@@ -762,28 +856,22 @@ async function installPackage(input: unknown): Promise<void> {
 
 async function enableMod(id: string, chain: string[] = []): Promise<boolean> {
   if (chain.includes(id)) throw new Error("Dependency cycle: " + id);
-
   const mod = await getMod(id);
   if (!mod) throw new Error("Khong tim thay mod: " + id);
-
   if (runtimes.has(id)) return true;
 
-  if (mod.manifest.minKBVersion &&
-      compareVersions(appVersion, mod.manifest.minKBVersion) < 0) {
+  if (mod.manifest.minKBVersion && compareVersions(appVersion, mod.manifest.minKBVersion) < 0) {
     throw new Error("Mod can KBVERSE " + mod.manifest.minKBVersion + " tro len.");
   }
 
   for (const dependency of mod.manifest.dependencies || []) {
     const dependencyMod = await getMod(dependency);
     if (!dependencyMod) throw new Error("Thieu dependency: " + dependency);
-
     await enableMod(dependency, [...chain, id]);
   }
 
   const requested = mod.manifest.permissions || [];
-  const missing = requested.filter(permission =>
-    !mod.grantedPermissions.includes(permission)
-  );
+  const missing = requested.filter(permission => !mod.grantedPermissions.includes(permission));
 
   if (missing.length) {
     const approved = confirm(
@@ -791,29 +879,21 @@ async function enableMod(id: string, chain: string[] = []): Promise<boolean> {
       missing.join("\n") +
       "\n\nChi cap quyen neu ban tin tuong mod nay."
     );
-
     if (!approved) return false;
-
-    mod.grantedPermissions = [...new Set([
-      ...mod.grantedPermissions,
-      ...missing
-    ])];
+    mod.grantedPermissions = [...new Set([...mod.grantedPermissions, ...missing])];
   }
 
   await restoreOwnedObjects(id);
   createRuntime(mod);
-
   mod.enabled = true;
   await saveMod(mod);
   await refreshManager();
-
   return true;
 }
 
 async function disableMod(id: string): Promise<void> {
   const mod = await getMod(id);
   if (!mod) return;
-
   disposeRuntime(id);
   mod.enabled = false;
   await saveMod(mod);
@@ -823,7 +903,6 @@ async function disableMod(id: string): Promise<void> {
 async function uninstallMod(id: string): Promise<void> {
   const mod = await getMod(id);
   if (!mod) return;
-
   if (!confirm("Gỡ mod '" + mod.manifest.name + "'?")) return;
 
   disposeRuntime(id);
@@ -833,19 +912,13 @@ async function uninstallMod(id: string): Promise<void> {
   const db = await openDB();
   await new Promise<void>((resolve, reject) => {
     const tx = db.transaction(DATA, "readwrite");
-    const store = tx.objectStore(DATA);
-    const request = store.openCursor();
-
+    const request = tx.objectStore(DATA).openCursor();
     request.onsuccess = () => {
       const cursor = request.result;
       if (!cursor) return;
-
-      if (String(cursor.key).startsWith("storage:" + id + ":")) {
-        cursor.delete();
-      }
+      if (String(cursor.key).startsWith("storage:" + id + ":")) cursor.delete();
       cursor.continue();
     };
-
     tx.oncomplete = () => resolve();
     tx.onerror = () => reject(tx.error);
   });
@@ -855,11 +928,9 @@ async function uninstallMod(id: string): Promise<void> {
 }
 
 function exportMod(mod: StoredMod): void {
-  const blob = new Blob([JSON.stringify({
-    manifest: mod.manifest,
-    source: mod.source
-  }, null, 2)], { type: "application/json" });
-
+  const blob = new Blob([JSON.stringify({ manifest: mod.manifest, source: mod.source }, null, 2)], {
+    type: "application/json"
+  });
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
@@ -871,10 +942,7 @@ function exportMod(mod: StoredMod): void {
 let manager: HTMLDivElement | null = null;
 let managerList: HTMLDivElement | null = null;
 
-function element<K extends keyof HTMLElementTagNameMap>(
-  tag: K,
-  text = ""
-): HTMLElementTagNameMap[K] {
+function element<K extends keyof HTMLElementTagNameMap>(tag: K, text = ""): HTMLElementTagNameMap[K] {
   const node = document.createElement(tag);
   node.textContent = text;
   return node;
@@ -882,9 +950,7 @@ function element<K extends keyof HTMLElementTagNameMap>(
 
 async function refreshManager(): Promise<void> {
   if (!managerList) return;
-
   managerList.replaceChildren();
-
   const mods = await listMods();
 
   if (!mods.length) {
@@ -902,10 +968,7 @@ async function refreshManager(): Promise<void> {
     const description = element("p", mod.manifest.description || "Khong co mo ta.");
     description.style.cssText = "font-size:12px;color:#bbb";
 
-    const status = element(
-      "div",
-      runtimes.has(mod.manifest.id) ? "● Running" : "○ Disabled"
-    );
+    const status = element("div", runtimes.has(mod.manifest.id) ? "● Running" : "○ Disabled");
     status.style.cssText = "font-size:11px;color:#aaa;margin:5px 0";
 
     const actions = element("div");
@@ -1007,26 +1070,22 @@ function createManager(): void {
   fileInput.addEventListener("change", async () => {
     const file = fileInput.files?.[0];
     if (!file) return;
-
     try {
       const parsed = JSON.parse(await file.text());
       await installPackage(parsed);
     } catch (error) {
       toast("Import failed: " + String(error));
     }
-
     fileInput.value = "";
   });
 
   managerList = element("div");
-
   manager.append(header, install, fileInput, managerList);
   document.body.appendChild(manager);
 }
 
 export async function initKBLoader(options: LoaderOptions): Promise<void> {
   if (initialized) return;
-
   if (!options || !options.scene) {
     throw new Error("KB Loader requires a THREE.Scene host.");
   }
@@ -1042,12 +1101,10 @@ export async function initKBLoader(options: LoaderOptions): Promise<void> {
   }
 
   createManager();
-
   const installed = await listMods();
 
   for (const mod of installed) {
     if (!mod.enabled) continue;
-
     try {
       await enableMod(mod.manifest.id);
     } catch (error) {
