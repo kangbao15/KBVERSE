@@ -48,20 +48,106 @@ light.shadow.mapSize.set(1024, 1024);
 scene.add(light);
 installSettings({ renderer, camera, scene, keyLight: light });
 
-const floor = new THREE.Mesh(
-  new THREE.PlaneGeometry(200, 200),
-  new THREE.MeshStandardMaterial({ color: "#171d2b", roughness: 0.92 })
+const groundMaterial = new THREE.ShaderMaterial({
+  uniforms: {
+    uCameraXZ: { value: new THREE.Vector2(7, 9) },
+    uFogStart: { value: 35 },
+    uFogEnd: { value: 49 },
+    uGroundColor: { value: new THREE.Color("#171d2b") },
+    uGridColor: { value: new THREE.Color("#303b53") },
+    uMajorGridColor: { value: new THREE.Color("#53678e") },
+    uFogColor: { value: new THREE.Color("#101522") }
+  },
+  vertexShader: `
+    varying vec3 vWorldPosition;
+
+    void main() {
+      vec4 worldPosition = modelMatrix * vec4(position, 1.0);
+      vWorldPosition = worldPosition.xyz;
+      gl_Position = projectionMatrix * viewMatrix * worldPosition;
+    }
+  `,
+  fragmentShader: `
+    uniform vec2 uCameraXZ;
+    uniform float uFogStart;
+    uniform float uFogEnd;
+    uniform vec3 uGroundColor;
+    uniform vec3 uGridColor;
+    uniform vec3 uMajorGridColor;
+    uniform vec3 uFogColor;
+
+    varying vec3 vWorldPosition;
+
+    float gridLine(vec2 coordinate) {
+      vec2 derivative = max(fwidth(coordinate), vec2(0.0001));
+      vec2 distanceToLine =
+        abs(fract(coordinate - 0.5) - 0.5) / derivative;
+
+      return 1.0 - min(
+        min(distanceToLine.x, distanceToLine.y),
+        1.0
+      );
+    }
+
+    void main() {
+      vec2 worldXZ = vWorldPosition.xz;
+
+      float minorGrid = gridLine(worldXZ);
+      float majorGrid = gridLine(worldXZ * 0.1);
+
+      vec3 ground = mix(
+        uGroundColor,
+        uGridColor,
+        minorGrid * 0.45
+      );
+
+      ground = mix(
+        ground,
+        uMajorGridColor,
+        majorGrid * 0.65
+      );
+
+      float distanceFromCamera = distance(worldXZ, uCameraXZ);
+      float fogFactor = smoothstep(
+        uFogStart,
+        uFogEnd,
+        distanceFromCamera
+      );
+
+      vec3 finalColor = mix(ground, uFogColor, fogFactor);
+
+      gl_FragColor = vec4(finalColor, 1.0);
+
+      #include <tonemapping_fragment>
+      #include <colorspace_fragment>
+    }
+  `
+});
+
+const worldFloor = new THREE.Mesh(
+  new THREE.PlaneGeometry(2, 2),
+  groundMaterial
 );
-floor.name = "Ground";
-floor.rotation.x = -Math.PI / 2;
-floor.position.y = -0.025;
-floor.receiveShadow = true;
-scene.add(floor);
 
-const grid = new THREE.GridHelper(40, 40, "#53678e", "#303b53");
-grid.position.y = 0.002;
-scene.add(grid);
+worldFloor.name = "Infinite World Ground";
+worldFloor.rotation.x = -Math.PI / 2;
+worldFloor.scale.setScalar(1000);
+worldFloor.position.set(camera.position.x, -0.025, camera.position.z);
+worldFloor.frustumCulled = false;
+scene.add(worldFloor);
 
+function updateWorldGround(): void {
+  worldFloor.position.x = camera.position.x;
+  worldFloor.position.z = camera.position.z;
+
+  groundMaterial.uniforms.uCameraXZ.value.set(
+    camera.position.x,
+    camera.position.z
+  );
+
+  groundMaterial.uniforms.uFogStart.value = camera.far * 0.58;
+  groundMaterial.uniforms.uFogEnd.value = camera.far * 0.82;
+}
 const editableObjects: THREE.Group[] = [];
 let selected: THREE.Group | null = null;
 let nextObjectId = 1;
@@ -145,10 +231,511 @@ const assetCatalog: AssetDefinition[] = [
   { id: "statue", name: "Statue", category: "Props", icon: "♟" },
   { id: "gate", name: "Gate", category: "Props", icon: "▥" },
   { id: "bench", name: "Bench", category: "Props", icon: "▰" },
-  { id: "mailbox", name: "Mailbox", category: "Props", icon: "▣" },  { id: "torus-knot", name: "Torus Knot", category: "Primitives", icon: "∞" }
+  { id: "mailbox", name: "Mailbox", category: "Props", icon: "▣" },  { id: "torus-knot", name: "Torus Knot", category: "Primitives", icon: "∞" },
+  { id: "kb2-building-modern-house-1", name: "Classic Modern House", category: "Buildings", icon: "🏢" },
+  { id: "kb2-building-modern-house-2", name: "Small Modern House", category: "Buildings", icon: "🏢" },
+  { id: "kb2-building-modern-house-3", name: "Large Modern House", category: "Buildings", icon: "🏢" },
+  { id: "kb2-building-modern-house-4", name: "Detailed Modern House", category: "Buildings", icon: "🏢" },
+  { id: "kb2-building-modern-house-5", name: "Ancient Modern House", category: "Buildings", icon: "🏢" },
+  { id: "kb2-building-luxury-villa-1", name: "Classic Luxury Villa", category: "Buildings", icon: "🏢" },
+  { id: "kb2-building-luxury-villa-2", name: "Small Luxury Villa", category: "Buildings", icon: "🏢" },
+  { id: "kb2-building-luxury-villa-3", name: "Large Luxury Villa", category: "Buildings", icon: "🏢" },
+  { id: "kb2-building-luxury-villa-4", name: "Detailed Luxury Villa", category: "Buildings", icon: "🏢" },
+  { id: "kb2-building-luxury-villa-5", name: "Ancient Luxury Villa", category: "Buildings", icon: "🏢" },
+  { id: "kb2-building-apartment-block-1", name: "Classic Apartment Block", category: "Buildings", icon: "🏢" },
+  { id: "kb2-building-apartment-block-2", name: "Small Apartment Block", category: "Buildings", icon: "🏢" },
+  { id: "kb2-building-apartment-block-3", name: "Large Apartment Block", category: "Buildings", icon: "🏢" },
+  { id: "kb2-building-apartment-block-4", name: "Detailed Apartment Block", category: "Buildings", icon: "🏢" },
+  { id: "kb2-building-apartment-block-5", name: "Ancient Apartment Block", category: "Buildings", icon: "🏢" },
+  { id: "kb2-building-skyscraper-1", name: "Classic Skyscraper", category: "Buildings", icon: "🏢" },
+  { id: "kb2-building-skyscraper-2", name: "Small Skyscraper", category: "Buildings", icon: "🏢" },
+  { id: "kb2-building-skyscraper-3", name: "Large Skyscraper", category: "Buildings", icon: "🏢" },
+  { id: "kb2-building-skyscraper-4", name: "Detailed Skyscraper", category: "Buildings", icon: "🏢" },
+  { id: "kb2-building-skyscraper-5", name: "Ancient Skyscraper", category: "Buildings", icon: "🏢" },
+  { id: "kb2-building-castle-1", name: "Classic Castle", category: "Buildings", icon: "🏢" },
+  { id: "kb2-building-castle-2", name: "Small Castle", category: "Buildings", icon: "🏢" },
+  { id: "kb2-building-castle-3", name: "Large Castle", category: "Buildings", icon: "🏢" },
+  { id: "kb2-building-castle-4", name: "Detailed Castle", category: "Buildings", icon: "🏢" },
+  { id: "kb2-building-castle-5", name: "Ancient Castle", category: "Buildings", icon: "🏢" },
+  { id: "kb2-building-wooden-cabin-1", name: "Classic Wooden Cabin", category: "Buildings", icon: "🏢" },
+  { id: "kb2-building-wooden-cabin-2", name: "Small Wooden Cabin", category: "Buildings", icon: "🏢" },
+  { id: "kb2-building-wooden-cabin-3", name: "Large Wooden Cabin", category: "Buildings", icon: "🏢" },
+  { id: "kb2-building-wooden-cabin-4", name: "Detailed Wooden Cabin", category: "Buildings", icon: "🏢" },
+  { id: "kb2-building-wooden-cabin-5", name: "Ancient Wooden Cabin", category: "Buildings", icon: "🏢" },
+  { id: "kb2-building-office-tower-1", name: "Classic Office Tower", category: "Buildings", icon: "🏢" },
+  { id: "kb2-building-office-tower-2", name: "Small Office Tower", category: "Buildings", icon: "🏢" },
+  { id: "kb2-building-office-tower-3", name: "Large Office Tower", category: "Buildings", icon: "🏢" },
+  { id: "kb2-building-office-tower-4", name: "Detailed Office Tower", category: "Buildings", icon: "🏢" },
+  { id: "kb2-building-office-tower-5", name: "Ancient Office Tower", category: "Buildings", icon: "🏢" },
+  { id: "kb2-building-school-1", name: "Classic School", category: "Buildings", icon: "🏢" },
+  { id: "kb2-building-school-2", name: "Small School", category: "Buildings", icon: "🏢" },
+  { id: "kb2-building-school-3", name: "Large School", category: "Buildings", icon: "🏢" },
+  { id: "kb2-building-school-4", name: "Detailed School", category: "Buildings", icon: "🏢" },
+  { id: "kb2-building-school-5", name: "Ancient School", category: "Buildings", icon: "🏢" },
+  { id: "kb2-building-hospital-1", name: "Classic Hospital", category: "Buildings", icon: "🏢" },
+  { id: "kb2-building-hospital-2", name: "Small Hospital", category: "Buildings", icon: "🏢" },
+  { id: "kb2-building-hospital-3", name: "Large Hospital", category: "Buildings", icon: "🏢" },
+  { id: "kb2-building-hospital-4", name: "Detailed Hospital", category: "Buildings", icon: "🏢" },
+  { id: "kb2-building-hospital-5", name: "Ancient Hospital", category: "Buildings", icon: "🏢" },
+  { id: "kb2-building-shopping-mall-1", name: "Classic Shopping Mall", category: "Buildings", icon: "🏢" },
+  { id: "kb2-building-shopping-mall-2", name: "Small Shopping Mall", category: "Buildings", icon: "🏢" },
+  { id: "kb2-building-shopping-mall-3", name: "Large Shopping Mall", category: "Buildings", icon: "🏢" },
+  { id: "kb2-building-shopping-mall-4", name: "Detailed Shopping Mall", category: "Buildings", icon: "🏢" },
+  { id: "kb2-building-shopping-mall-5", name: "Ancient Shopping Mall", category: "Buildings", icon: "🏢" },
+  { id: "kb2-nature-oak-tree-1", name: "Classic Oak Tree", category: "Nature", icon: "🌳" },
+  { id: "kb2-nature-oak-tree-2", name: "Small Oak Tree", category: "Nature", icon: "🌳" },
+  { id: "kb2-nature-oak-tree-3", name: "Large Oak Tree", category: "Nature", icon: "🌳" },
+  { id: "kb2-nature-oak-tree-4", name: "Detailed Oak Tree", category: "Nature", icon: "🌳" },
+  { id: "kb2-nature-oak-tree-5", name: "Ancient Oak Tree", category: "Nature", icon: "🌳" },
+  { id: "kb2-nature-pine-tree-1", name: "Classic Pine Tree", category: "Nature", icon: "🌳" },
+  { id: "kb2-nature-pine-tree-2", name: "Small Pine Tree", category: "Nature", icon: "🌳" },
+  { id: "kb2-nature-pine-tree-3", name: "Large Pine Tree", category: "Nature", icon: "🌳" },
+  { id: "kb2-nature-pine-tree-4", name: "Detailed Pine Tree", category: "Nature", icon: "🌳" },
+  { id: "kb2-nature-pine-tree-5", name: "Ancient Pine Tree", category: "Nature", icon: "🌳" },
+  { id: "kb2-nature-palm-tree-1", name: "Classic Palm Tree", category: "Nature", icon: "🌳" },
+  { id: "kb2-nature-palm-tree-2", name: "Small Palm Tree", category: "Nature", icon: "🌳" },
+  { id: "kb2-nature-palm-tree-3", name: "Large Palm Tree", category: "Nature", icon: "🌳" },
+  { id: "kb2-nature-palm-tree-4", name: "Detailed Palm Tree", category: "Nature", icon: "🌳" },
+  { id: "kb2-nature-palm-tree-5", name: "Ancient Palm Tree", category: "Nature", icon: "🌳" },
+  { id: "kb2-nature-flower-tree-1", name: "Classic Flower Tree", category: "Nature", icon: "🌳" },
+  { id: "kb2-nature-flower-tree-2", name: "Small Flower Tree", category: "Nature", icon: "🌳" },
+  { id: "kb2-nature-flower-tree-3", name: "Large Flower Tree", category: "Nature", icon: "🌳" },
+  { id: "kb2-nature-flower-tree-4", name: "Detailed Flower Tree", category: "Nature", icon: "🌳" },
+  { id: "kb2-nature-flower-tree-5", name: "Ancient Flower Tree", category: "Nature", icon: "🌳" },
+  { id: "kb2-nature-rock-formation-1", name: "Classic Rock Formation", category: "Nature", icon: "🌳" },
+  { id: "kb2-nature-rock-formation-2", name: "Small Rock Formation", category: "Nature", icon: "🌳" },
+  { id: "kb2-nature-rock-formation-3", name: "Large Rock Formation", category: "Nature", icon: "🌳" },
+  { id: "kb2-nature-rock-formation-4", name: "Detailed Rock Formation", category: "Nature", icon: "🌳" },
+  { id: "kb2-nature-rock-formation-5", name: "Ancient Rock Formation", category: "Nature", icon: "🌳" },
+  { id: "kb2-nature-mountain-1", name: "Classic Mountain", category: "Nature", icon: "🌳" },
+  { id: "kb2-nature-mountain-2", name: "Small Mountain", category: "Nature", icon: "🌳" },
+  { id: "kb2-nature-mountain-3", name: "Large Mountain", category: "Nature", icon: "🌳" },
+  { id: "kb2-nature-mountain-4", name: "Detailed Mountain", category: "Nature", icon: "🌳" },
+  { id: "kb2-nature-mountain-5", name: "Ancient Mountain", category: "Nature", icon: "🌳" },
+  { id: "kb2-nature-bush-1", name: "Classic Bush", category: "Nature", icon: "🌳" },
+  { id: "kb2-nature-bush-2", name: "Small Bush", category: "Nature", icon: "🌳" },
+  { id: "kb2-nature-bush-3", name: "Large Bush", category: "Nature", icon: "🌳" },
+  { id: "kb2-nature-bush-4", name: "Detailed Bush", category: "Nature", icon: "🌳" },
+  { id: "kb2-nature-bush-5", name: "Ancient Bush", category: "Nature", icon: "🌳" },
+  { id: "kb2-nature-cactus-1", name: "Classic Cactus", category: "Nature", icon: "🌳" },
+  { id: "kb2-nature-cactus-2", name: "Small Cactus", category: "Nature", icon: "🌳" },
+  { id: "kb2-nature-cactus-3", name: "Large Cactus", category: "Nature", icon: "🌳" },
+  { id: "kb2-nature-cactus-4", name: "Detailed Cactus", category: "Nature", icon: "🌳" },
+  { id: "kb2-nature-cactus-5", name: "Ancient Cactus", category: "Nature", icon: "🌳" },
+  { id: "kb2-nature-mushroom-1", name: "Classic Mushroom", category: "Nature", icon: "🌳" },
+  { id: "kb2-nature-mushroom-2", name: "Small Mushroom", category: "Nature", icon: "🌳" },
+  { id: "kb2-nature-mushroom-3", name: "Large Mushroom", category: "Nature", icon: "🌳" },
+  { id: "kb2-nature-mushroom-4", name: "Detailed Mushroom", category: "Nature", icon: "🌳" },
+  { id: "kb2-nature-mushroom-5", name: "Ancient Mushroom", category: "Nature", icon: "🌳" },
+  { id: "kb2-nature-waterfall-1", name: "Classic Waterfall", category: "Nature", icon: "🌳" },
+  { id: "kb2-nature-waterfall-2", name: "Small Waterfall", category: "Nature", icon: "🌳" },
+  { id: "kb2-nature-waterfall-3", name: "Large Waterfall", category: "Nature", icon: "🌳" },
+  { id: "kb2-nature-waterfall-4", name: "Detailed Waterfall", category: "Nature", icon: "🌳" },
+  { id: "kb2-nature-waterfall-5", name: "Ancient Waterfall", category: "Nature", icon: "🌳" },
+  { id: "kb2-vehicle-sports-car-1", name: "Classic Sports Car", category: "Vehicles", icon: "🚗" },
+  { id: "kb2-vehicle-sports-car-2", name: "Small Sports Car", category: "Vehicles", icon: "🚗" },
+  { id: "kb2-vehicle-sports-car-3", name: "Large Sports Car", category: "Vehicles", icon: "🚗" },
+  { id: "kb2-vehicle-sports-car-4", name: "Detailed Sports Car", category: "Vehicles", icon: "🚗" },
+  { id: "kb2-vehicle-sports-car-5", name: "Ancient Sports Car", category: "Vehicles", icon: "🚗" },
+  { id: "kb2-vehicle-suv-1", name: "Classic SUV", category: "Vehicles", icon: "🚗" },
+  { id: "kb2-vehicle-suv-2", name: "Small SUV", category: "Vehicles", icon: "🚗" },
+  { id: "kb2-vehicle-suv-3", name: "Large SUV", category: "Vehicles", icon: "🚗" },
+  { id: "kb2-vehicle-suv-4", name: "Detailed SUV", category: "Vehicles", icon: "🚗" },
+  { id: "kb2-vehicle-suv-5", name: "Ancient SUV", category: "Vehicles", icon: "🚗" },
+  { id: "kb2-vehicle-pickup-truck-1", name: "Classic Pickup Truck", category: "Vehicles", icon: "🚗" },
+  { id: "kb2-vehicle-pickup-truck-2", name: "Small Pickup Truck", category: "Vehicles", icon: "🚗" },
+  { id: "kb2-vehicle-pickup-truck-3", name: "Large Pickup Truck", category: "Vehicles", icon: "🚗" },
+  { id: "kb2-vehicle-pickup-truck-4", name: "Detailed Pickup Truck", category: "Vehicles", icon: "🚗" },
+  { id: "kb2-vehicle-pickup-truck-5", name: "Ancient Pickup Truck", category: "Vehicles", icon: "🚗" },
+  { id: "kb2-vehicle-bus-1", name: "Classic Bus", category: "Vehicles", icon: "🚗" },
+  { id: "kb2-vehicle-bus-2", name: "Small Bus", category: "Vehicles", icon: "🚗" },
+  { id: "kb2-vehicle-bus-3", name: "Large Bus", category: "Vehicles", icon: "🚗" },
+  { id: "kb2-vehicle-bus-4", name: "Detailed Bus", category: "Vehicles", icon: "🚗" },
+  { id: "kb2-vehicle-bus-5", name: "Ancient Bus", category: "Vehicles", icon: "🚗" },
+  { id: "kb2-vehicle-van-1", name: "Classic Van", category: "Vehicles", icon: "🚗" },
+  { id: "kb2-vehicle-van-2", name: "Small Van", category: "Vehicles", icon: "🚗" },
+  { id: "kb2-vehicle-van-3", name: "Large Van", category: "Vehicles", icon: "🚗" },
+  { id: "kb2-vehicle-van-4", name: "Detailed Van", category: "Vehicles", icon: "🚗" },
+  { id: "kb2-vehicle-van-5", name: "Ancient Van", category: "Vehicles", icon: "🚗" },
+  { id: "kb2-vehicle-motorcycle-1", name: "Classic Motorcycle", category: "Vehicles", icon: "🚗" },
+  { id: "kb2-vehicle-motorcycle-2", name: "Small Motorcycle", category: "Vehicles", icon: "🚗" },
+  { id: "kb2-vehicle-motorcycle-3", name: "Large Motorcycle", category: "Vehicles", icon: "🚗" },
+  { id: "kb2-vehicle-motorcycle-4", name: "Detailed Motorcycle", category: "Vehicles", icon: "🚗" },
+  { id: "kb2-vehicle-motorcycle-5", name: "Ancient Motorcycle", category: "Vehicles", icon: "🚗" },
+  { id: "kb2-vehicle-scooter-1", name: "Classic Scooter", category: "Vehicles", icon: "🚗" },
+  { id: "kb2-vehicle-scooter-2", name: "Small Scooter", category: "Vehicles", icon: "🚗" },
+  { id: "kb2-vehicle-scooter-3", name: "Large Scooter", category: "Vehicles", icon: "🚗" },
+  { id: "kb2-vehicle-scooter-4", name: "Detailed Scooter", category: "Vehicles", icon: "🚗" },
+  { id: "kb2-vehicle-scooter-5", name: "Ancient Scooter", category: "Vehicles", icon: "🚗" },
+  { id: "kb2-vehicle-tractor-1", name: "Classic Tractor", category: "Vehicles", icon: "🚗" },
+  { id: "kb2-vehicle-tractor-2", name: "Small Tractor", category: "Vehicles", icon: "🚗" },
+  { id: "kb2-vehicle-tractor-3", name: "Large Tractor", category: "Vehicles", icon: "🚗" },
+  { id: "kb2-vehicle-tractor-4", name: "Detailed Tractor", category: "Vehicles", icon: "🚗" },
+  { id: "kb2-vehicle-tractor-5", name: "Ancient Tractor", category: "Vehicles", icon: "🚗" },
+  { id: "kb2-vehicle-race-car-1", name: "Classic Race Car", category: "Vehicles", icon: "🚗" },
+  { id: "kb2-vehicle-race-car-2", name: "Small Race Car", category: "Vehicles", icon: "🚗" },
+  { id: "kb2-vehicle-race-car-3", name: "Large Race Car", category: "Vehicles", icon: "🚗" },
+  { id: "kb2-vehicle-race-car-4", name: "Detailed Race Car", category: "Vehicles", icon: "🚗" },
+  { id: "kb2-vehicle-race-car-5", name: "Ancient Race Car", category: "Vehicles", icon: "🚗" },
+  { id: "kb2-vehicle-delivery-truck-1", name: "Classic Delivery Truck", category: "Vehicles", icon: "🚗" },
+  { id: "kb2-vehicle-delivery-truck-2", name: "Small Delivery Truck", category: "Vehicles", icon: "🚗" },
+  { id: "kb2-vehicle-delivery-truck-3", name: "Large Delivery Truck", category: "Vehicles", icon: "🚗" },
+  { id: "kb2-vehicle-delivery-truck-4", name: "Detailed Delivery Truck", category: "Vehicles", icon: "🚗" },
+  { id: "kb2-vehicle-delivery-truck-5", name: "Ancient Delivery Truck", category: "Vehicles", icon: "🚗" },
+  { id: "kb2-furniture-office-desk-1", name: "Classic Office Desk", category: "Furniture", icon: "🪑" },
+  { id: "kb2-furniture-office-desk-2", name: "Small Office Desk", category: "Furniture", icon: "🪑" },
+  { id: "kb2-furniture-office-desk-3", name: "Large Office Desk", category: "Furniture", icon: "🪑" },
+  { id: "kb2-furniture-office-desk-4", name: "Detailed Office Desk", category: "Furniture", icon: "🪑" },
+  { id: "kb2-furniture-office-desk-5", name: "Ancient Office Desk", category: "Furniture", icon: "🪑" },
+  { id: "kb2-furniture-gaming-desk-1", name: "Classic Gaming Desk", category: "Furniture", icon: "🪑" },
+  { id: "kb2-furniture-gaming-desk-2", name: "Small Gaming Desk", category: "Furniture", icon: "🪑" },
+  { id: "kb2-furniture-gaming-desk-3", name: "Large Gaming Desk", category: "Furniture", icon: "🪑" },
+  { id: "kb2-furniture-gaming-desk-4", name: "Detailed Gaming Desk", category: "Furniture", icon: "🪑" },
+  { id: "kb2-furniture-gaming-desk-5", name: "Ancient Gaming Desk", category: "Furniture", icon: "🪑" },
+  { id: "kb2-furniture-dining-table-1", name: "Classic Dining Table", category: "Furniture", icon: "🪑" },
+  { id: "kb2-furniture-dining-table-2", name: "Small Dining Table", category: "Furniture", icon: "🪑" },
+  { id: "kb2-furniture-dining-table-3", name: "Large Dining Table", category: "Furniture", icon: "🪑" },
+  { id: "kb2-furniture-dining-table-4", name: "Detailed Dining Table", category: "Furniture", icon: "🪑" },
+  { id: "kb2-furniture-dining-table-5", name: "Ancient Dining Table", category: "Furniture", icon: "🪑" },
+  { id: "kb2-furniture-wooden-chair-1", name: "Classic Wooden Chair", category: "Furniture", icon: "🪑" },
+  { id: "kb2-furniture-wooden-chair-2", name: "Small Wooden Chair", category: "Furniture", icon: "🪑" },
+  { id: "kb2-furniture-wooden-chair-3", name: "Large Wooden Chair", category: "Furniture", icon: "🪑" },
+  { id: "kb2-furniture-wooden-chair-4", name: "Detailed Wooden Chair", category: "Furniture", icon: "🪑" },
+  { id: "kb2-furniture-wooden-chair-5", name: "Ancient Wooden Chair", category: "Furniture", icon: "🪑" },
+  { id: "kb2-furniture-sofa-1", name: "Classic Sofa", category: "Furniture", icon: "🪑" },
+  { id: "kb2-furniture-sofa-2", name: "Small Sofa", category: "Furniture", icon: "🪑" },
+  { id: "kb2-furniture-sofa-3", name: "Large Sofa", category: "Furniture", icon: "🪑" },
+  { id: "kb2-furniture-sofa-4", name: "Detailed Sofa", category: "Furniture", icon: "🪑" },
+  { id: "kb2-furniture-sofa-5", name: "Ancient Sofa", category: "Furniture", icon: "🪑" },
+  { id: "kb2-furniture-bookshelf-1", name: "Classic Bookshelf", category: "Furniture", icon: "🪑" },
+  { id: "kb2-furniture-bookshelf-2", name: "Small Bookshelf", category: "Furniture", icon: "🪑" },
+  { id: "kb2-furniture-bookshelf-3", name: "Large Bookshelf", category: "Furniture", icon: "🪑" },
+  { id: "kb2-furniture-bookshelf-4", name: "Detailed Bookshelf", category: "Furniture", icon: "🪑" },
+  { id: "kb2-furniture-bookshelf-5", name: "Ancient Bookshelf", category: "Furniture", icon: "🪑" },
+  { id: "kb2-furniture-wardrobe-1", name: "Classic Wardrobe", category: "Furniture", icon: "🪑" },
+  { id: "kb2-furniture-wardrobe-2", name: "Small Wardrobe", category: "Furniture", icon: "🪑" },
+  { id: "kb2-furniture-wardrobe-3", name: "Large Wardrobe", category: "Furniture", icon: "🪑" },
+  { id: "kb2-furniture-wardrobe-4", name: "Detailed Wardrobe", category: "Furniture", icon: "🪑" },
+  { id: "kb2-furniture-wardrobe-5", name: "Ancient Wardrobe", category: "Furniture", icon: "🪑" },
+  { id: "kb2-furniture-cabinet-1", name: "Classic Cabinet", category: "Furniture", icon: "🪑" },
+  { id: "kb2-furniture-cabinet-2", name: "Small Cabinet", category: "Furniture", icon: "🪑" },
+  { id: "kb2-furniture-cabinet-3", name: "Large Cabinet", category: "Furniture", icon: "🪑" },
+  { id: "kb2-furniture-cabinet-4", name: "Detailed Cabinet", category: "Furniture", icon: "🪑" },
+  { id: "kb2-furniture-cabinet-5", name: "Ancient Cabinet", category: "Furniture", icon: "🪑" },
+  { id: "kb2-furniture-bed-1", name: "Classic Bed", category: "Furniture", icon: "🪑" },
+  { id: "kb2-furniture-bed-2", name: "Small Bed", category: "Furniture", icon: "🪑" },
+  { id: "kb2-furniture-bed-3", name: "Large Bed", category: "Furniture", icon: "🪑" },
+  { id: "kb2-furniture-bed-4", name: "Detailed Bed", category: "Furniture", icon: "🪑" },
+  { id: "kb2-furniture-bed-5", name: "Ancient Bed", category: "Furniture", icon: "🪑" },
+  { id: "kb2-furniture-coffee-table-1", name: "Classic Coffee Table", category: "Furniture", icon: "🪑" },
+  { id: "kb2-furniture-coffee-table-2", name: "Small Coffee Table", category: "Furniture", icon: "🪑" },
+  { id: "kb2-furniture-coffee-table-3", name: "Large Coffee Table", category: "Furniture", icon: "🪑" },
+  { id: "kb2-furniture-coffee-table-4", name: "Detailed Coffee Table", category: "Furniture", icon: "🪑" },
+  { id: "kb2-furniture-coffee-table-5", name: "Ancient Coffee Table", category: "Furniture", icon: "🪑" },
+  { id: "kb2-prop-street-lamp-1", name: "Classic Street Lamp", category: "Props", icon: "📦" },
+  { id: "kb2-prop-street-lamp-2", name: "Small Street Lamp", category: "Props", icon: "📦" },
+  { id: "kb2-prop-street-lamp-3", name: "Large Street Lamp", category: "Props", icon: "📦" },
+  { id: "kb2-prop-street-lamp-4", name: "Detailed Street Lamp", category: "Props", icon: "📦" },
+  { id: "kb2-prop-street-lamp-5", name: "Ancient Street Lamp", category: "Props", icon: "📦" },
+  { id: "kb2-prop-traffic-sign-1", name: "Classic Traffic Sign", category: "Props", icon: "📦" },
+  { id: "kb2-prop-traffic-sign-2", name: "Small Traffic Sign", category: "Props", icon: "📦" },
+  { id: "kb2-prop-traffic-sign-3", name: "Large Traffic Sign", category: "Props", icon: "📦" },
+  { id: "kb2-prop-traffic-sign-4", name: "Detailed Traffic Sign", category: "Props", icon: "📦" },
+  { id: "kb2-prop-traffic-sign-5", name: "Ancient Traffic Sign", category: "Props", icon: "📦" },
+  { id: "kb2-prop-mailbox-1", name: "Classic Mailbox", category: "Props", icon: "📦" },
+  { id: "kb2-prop-mailbox-2", name: "Small Mailbox", category: "Props", icon: "📦" },
+  { id: "kb2-prop-mailbox-3", name: "Large Mailbox", category: "Props", icon: "📦" },
+  { id: "kb2-prop-mailbox-4", name: "Detailed Mailbox", category: "Props", icon: "📦" },
+  { id: "kb2-prop-mailbox-5", name: "Ancient Mailbox", category: "Props", icon: "📦" },
+  { id: "kb2-prop-trash-bin-1", name: "Classic Trash Bin", category: "Props", icon: "📦" },
+  { id: "kb2-prop-trash-bin-2", name: "Small Trash Bin", category: "Props", icon: "📦" },
+  { id: "kb2-prop-trash-bin-3", name: "Large Trash Bin", category: "Props", icon: "📦" },
+  { id: "kb2-prop-trash-bin-4", name: "Detailed Trash Bin", category: "Props", icon: "📦" },
+  { id: "kb2-prop-trash-bin-5", name: "Ancient Trash Bin", category: "Props", icon: "📦" },
+  { id: "kb2-prop-water-fountain-1", name: "Classic Water Fountain", category: "Props", icon: "📦" },
+  { id: "kb2-prop-water-fountain-2", name: "Small Water Fountain", category: "Props", icon: "📦" },
+  { id: "kb2-prop-water-fountain-3", name: "Large Water Fountain", category: "Props", icon: "📦" },
+  { id: "kb2-prop-water-fountain-4", name: "Detailed Water Fountain", category: "Props", icon: "📦" },
+  { id: "kb2-prop-water-fountain-5", name: "Ancient Water Fountain", category: "Props", icon: "📦" },
+  { id: "kb2-prop-bench-1", name: "Classic Bench", category: "Props", icon: "📦" },
+  { id: "kb2-prop-bench-2", name: "Small Bench", category: "Props", icon: "📦" },
+  { id: "kb2-prop-bench-3", name: "Large Bench", category: "Props", icon: "📦" },
+  { id: "kb2-prop-bench-4", name: "Detailed Bench", category: "Props", icon: "📦" },
+  { id: "kb2-prop-bench-5", name: "Ancient Bench", category: "Props", icon: "📦" },
+  { id: "kb2-prop-clock-1", name: "Classic Clock", category: "Props", icon: "📦" },
+  { id: "kb2-prop-clock-2", name: "Small Clock", category: "Props", icon: "📦" },
+  { id: "kb2-prop-clock-3", name: "Large Clock", category: "Props", icon: "📦" },
+  { id: "kb2-prop-clock-4", name: "Detailed Clock", category: "Props", icon: "📦" },
+  { id: "kb2-prop-clock-5", name: "Ancient Clock", category: "Props", icon: "📦" },
+  { id: "kb2-prop-statue-1", name: "Classic Statue", category: "Props", icon: "📦" },
+  { id: "kb2-prop-statue-2", name: "Small Statue", category: "Props", icon: "📦" },
+  { id: "kb2-prop-statue-3", name: "Large Statue", category: "Props", icon: "📦" },
+  { id: "kb2-prop-statue-4", name: "Detailed Statue", category: "Props", icon: "📦" },
+  { id: "kb2-prop-statue-5", name: "Ancient Statue", category: "Props", icon: "📦" },
+  { id: "kb2-prop-fence-1", name: "Classic Fence", category: "Props", icon: "📦" },
+  { id: "kb2-prop-fence-2", name: "Small Fence", category: "Props", icon: "📦" },
+  { id: "kb2-prop-fence-3", name: "Large Fence", category: "Props", icon: "📦" },
+  { id: "kb2-prop-fence-4", name: "Detailed Fence", category: "Props", icon: "📦" },
+  { id: "kb2-prop-fence-5", name: "Ancient Fence", category: "Props", icon: "📦" },
+  { id: "kb2-prop-flower-pot-1", name: "Classic Flower Pot", category: "Props", icon: "📦" },
+  { id: "kb2-prop-flower-pot-2", name: "Small Flower Pot", category: "Props", icon: "📦" },
+  { id: "kb2-prop-flower-pot-3", name: "Large Flower Pot", category: "Props", icon: "📦" },
+  { id: "kb2-prop-flower-pot-4", name: "Detailed Flower Pot", category: "Props", icon: "📦" },
+  { id: "kb2-prop-flower-pot-5", name: "Ancient Flower Pot", category: "Props", icon: "📦" },
+  { id: "kb2-character-explorer-1", name: "Classic Explorer", category: "Characters", icon: "🧍" },
+  { id: "kb2-character-explorer-2", name: "Small Explorer", category: "Characters", icon: "🧍" },
+  { id: "kb2-character-explorer-3", name: "Large Explorer", category: "Characters", icon: "🧍" },
+  { id: "kb2-character-explorer-4", name: "Detailed Explorer", category: "Characters", icon: "🧍" },
+  { id: "kb2-character-explorer-5", name: "Ancient Explorer", category: "Characters", icon: "🧍" },
+  { id: "kb2-character-knight-1", name: "Classic Knight", category: "Characters", icon: "🧍" },
+  { id: "kb2-character-knight-2", name: "Small Knight", category: "Characters", icon: "🧍" },
+  { id: "kb2-character-knight-3", name: "Large Knight", category: "Characters", icon: "🧍" },
+  { id: "kb2-character-knight-4", name: "Detailed Knight", category: "Characters", icon: "🧍" },
+  { id: "kb2-character-knight-5", name: "Ancient Knight", category: "Characters", icon: "🧍" },
+  { id: "kb2-character-robot-1", name: "Classic Robot", category: "Characters", icon: "🧍" },
+  { id: "kb2-character-robot-2", name: "Small Robot", category: "Characters", icon: "🧍" },
+  { id: "kb2-character-robot-3", name: "Large Robot", category: "Characters", icon: "🧍" },
+  { id: "kb2-character-robot-4", name: "Detailed Robot", category: "Characters", icon: "🧍" },
+  { id: "kb2-character-robot-5", name: "Ancient Robot", category: "Characters", icon: "🧍" },
+  { id: "kb2-character-wizard-1", name: "Classic Wizard", category: "Characters", icon: "🧍" },
+  { id: "kb2-character-wizard-2", name: "Small Wizard", category: "Characters", icon: "🧍" },
+  { id: "kb2-character-wizard-3", name: "Large Wizard", category: "Characters", icon: "🧍" },
+  { id: "kb2-character-wizard-4", name: "Detailed Wizard", category: "Characters", icon: "🧍" },
+  { id: "kb2-character-wizard-5", name: "Ancient Wizard", category: "Characters", icon: "🧍" },
+  { id: "kb2-character-scientist-1", name: "Classic Scientist", category: "Characters", icon: "🧍" },
+  { id: "kb2-character-scientist-2", name: "Small Scientist", category: "Characters", icon: "🧍" },
+  { id: "kb2-character-scientist-3", name: "Large Scientist", category: "Characters", icon: "🧍" },
+  { id: "kb2-character-scientist-4", name: "Detailed Scientist", category: "Characters", icon: "🧍" },
+  { id: "kb2-character-scientist-5", name: "Ancient Scientist", category: "Characters", icon: "🧍" },
+  { id: "kb2-character-worker-1", name: "Classic Worker", category: "Characters", icon: "🧍" },
+  { id: "kb2-character-worker-2", name: "Small Worker", category: "Characters", icon: "🧍" },
+  { id: "kb2-character-worker-3", name: "Large Worker", category: "Characters", icon: "🧍" },
+  { id: "kb2-character-worker-4", name: "Detailed Worker", category: "Characters", icon: "🧍" },
+  { id: "kb2-character-worker-5", name: "Ancient Worker", category: "Characters", icon: "🧍" },
+  { id: "kb2-character-astronaut-1", name: "Classic Astronaut", category: "Characters", icon: "🧍" },
+  { id: "kb2-character-astronaut-2", name: "Small Astronaut", category: "Characters", icon: "🧍" },
+  { id: "kb2-character-astronaut-3", name: "Large Astronaut", category: "Characters", icon: "🧍" },
+  { id: "kb2-character-astronaut-4", name: "Detailed Astronaut", category: "Characters", icon: "🧍" },
+  { id: "kb2-character-astronaut-5", name: "Ancient Astronaut", category: "Characters", icon: "🧍" },
+  { id: "kb2-character-guard-1", name: "Classic Guard", category: "Characters", icon: "🧍" },
+  { id: "kb2-character-guard-2", name: "Small Guard", category: "Characters", icon: "🧍" },
+  { id: "kb2-character-guard-3", name: "Large Guard", category: "Characters", icon: "🧍" },
+  { id: "kb2-character-guard-4", name: "Detailed Guard", category: "Characters", icon: "🧍" },
+  { id: "kb2-character-guard-5", name: "Ancient Guard", category: "Characters", icon: "🧍" },
+  { id: "kb2-character-adventurer-1", name: "Classic Adventurer", category: "Characters", icon: "🧍" },
+  { id: "kb2-character-adventurer-2", name: "Small Adventurer", category: "Characters", icon: "🧍" },
+  { id: "kb2-character-adventurer-3", name: "Large Adventurer", category: "Characters", icon: "🧍" },
+  { id: "kb2-character-adventurer-4", name: "Detailed Adventurer", category: "Characters", icon: "🧍" },
+  { id: "kb2-character-adventurer-5", name: "Ancient Adventurer", category: "Characters", icon: "🧍" },
+  { id: "kb2-character-villager-1", name: "Classic Villager", category: "Characters", icon: "🧍" },
+  { id: "kb2-character-villager-2", name: "Small Villager", category: "Characters", icon: "🧍" },
+  { id: "kb2-character-villager-3", name: "Large Villager", category: "Characters", icon: "🧍" },
+  { id: "kb2-character-villager-4", name: "Detailed Villager", category: "Characters", icon: "🧍" },
+  { id: "kb2-character-villager-5", name: "Ancient Villager", category: "Characters", icon: "🧍" },
+  { id: "kb2-architecture-stone-arch-1", name: "Classic Stone Arch", category: "Architecture", icon: "🏛️" },
+  { id: "kb2-architecture-stone-arch-2", name: "Small Stone Arch", category: "Architecture", icon: "🏛️" },
+  { id: "kb2-architecture-stone-arch-3", name: "Large Stone Arch", category: "Architecture", icon: "🏛️" },
+  { id: "kb2-architecture-stone-arch-4", name: "Detailed Stone Arch", category: "Architecture", icon: "🏛️" },
+  { id: "kb2-architecture-stone-arch-5", name: "Ancient Stone Arch", category: "Architecture", icon: "🏛️" },
+  { id: "kb2-architecture-grand-pillar-1", name: "Classic Grand Pillar", category: "Architecture", icon: "🏛️" },
+  { id: "kb2-architecture-grand-pillar-2", name: "Small Grand Pillar", category: "Architecture", icon: "🏛️" },
+  { id: "kb2-architecture-grand-pillar-3", name: "Large Grand Pillar", category: "Architecture", icon: "🏛️" },
+  { id: "kb2-architecture-grand-pillar-4", name: "Detailed Grand Pillar", category: "Architecture", icon: "🏛️" },
+  { id: "kb2-architecture-grand-pillar-5", name: "Ancient Grand Pillar", category: "Architecture", icon: "🏛️" },
+  { id: "kb2-architecture-temple-1", name: "Classic Temple", category: "Architecture", icon: "🏛️" },
+  { id: "kb2-architecture-temple-2", name: "Small Temple", category: "Architecture", icon: "🏛️" },
+  { id: "kb2-architecture-temple-3", name: "Large Temple", category: "Architecture", icon: "🏛️" },
+  { id: "kb2-architecture-temple-4", name: "Detailed Temple", category: "Architecture", icon: "🏛️" },
+  { id: "kb2-architecture-temple-5", name: "Ancient Temple", category: "Architecture", icon: "🏛️" },
+  { id: "kb2-architecture-monument-1", name: "Classic Monument", category: "Architecture", icon: "🏛️" },
+  { id: "kb2-architecture-monument-2", name: "Small Monument", category: "Architecture", icon: "🏛️" },
+  { id: "kb2-architecture-monument-3", name: "Large Monument", category: "Architecture", icon: "🏛️" },
+  { id: "kb2-architecture-monument-4", name: "Detailed Monument", category: "Architecture", icon: "🏛️" },
+  { id: "kb2-architecture-monument-5", name: "Ancient Monument", category: "Architecture", icon: "🏛️" },
+  { id: "kb2-architecture-gazebo-1", name: "Classic Gazebo", category: "Architecture", icon: "🏛️" },
+  { id: "kb2-architecture-gazebo-2", name: "Small Gazebo", category: "Architecture", icon: "🏛️" },
+  { id: "kb2-architecture-gazebo-3", name: "Large Gazebo", category: "Architecture", icon: "🏛️" },
+  { id: "kb2-architecture-gazebo-4", name: "Detailed Gazebo", category: "Architecture", icon: "🏛️" },
+  { id: "kb2-architecture-gazebo-5", name: "Ancient Gazebo", category: "Architecture", icon: "🏛️" },
+  { id: "kb2-architecture-watchtower-1", name: "Classic Watchtower", category: "Architecture", icon: "🏛️" },
+  { id: "kb2-architecture-watchtower-2", name: "Small Watchtower", category: "Architecture", icon: "🏛️" },
+  { id: "kb2-architecture-watchtower-3", name: "Large Watchtower", category: "Architecture", icon: "🏛️" },
+  { id: "kb2-architecture-watchtower-4", name: "Detailed Watchtower", category: "Architecture", icon: "🏛️" },
+  { id: "kb2-architecture-watchtower-5", name: "Ancient Watchtower", category: "Architecture", icon: "🏛️" },
+  { id: "kb2-architecture-aqueduct-1", name: "Classic Aqueduct", category: "Architecture", icon: "🏛️" },
+  { id: "kb2-architecture-aqueduct-2", name: "Small Aqueduct", category: "Architecture", icon: "🏛️" },
+  { id: "kb2-architecture-aqueduct-3", name: "Large Aqueduct", category: "Architecture", icon: "🏛️" },
+  { id: "kb2-architecture-aqueduct-4", name: "Detailed Aqueduct", category: "Architecture", icon: "🏛️" },
+  { id: "kb2-architecture-aqueduct-5", name: "Ancient Aqueduct", category: "Architecture", icon: "🏛️" },
+  { id: "kb2-architecture-pavilion-1", name: "Classic Pavilion", category: "Architecture", icon: "🏛️" },
+  { id: "kb2-architecture-pavilion-2", name: "Small Pavilion", category: "Architecture", icon: "🏛️" },
+  { id: "kb2-architecture-pavilion-3", name: "Large Pavilion", category: "Architecture", icon: "🏛️" },
+  { id: "kb2-architecture-pavilion-4", name: "Detailed Pavilion", category: "Architecture", icon: "🏛️" },
+  { id: "kb2-architecture-pavilion-5", name: "Ancient Pavilion", category: "Architecture", icon: "🏛️" },
+  { id: "kb2-architecture-bell-tower-1", name: "Classic Bell Tower", category: "Architecture", icon: "🏛️" },
+  { id: "kb2-architecture-bell-tower-2", name: "Small Bell Tower", category: "Architecture", icon: "🏛️" },
+  { id: "kb2-architecture-bell-tower-3", name: "Large Bell Tower", category: "Architecture", icon: "🏛️" },
+  { id: "kb2-architecture-bell-tower-4", name: "Detailed Bell Tower", category: "Architecture", icon: "🏛️" },
+  { id: "kb2-architecture-bell-tower-5", name: "Ancient Bell Tower", category: "Architecture", icon: "🏛️" },
+  { id: "kb2-architecture-fountain-plaza-1", name: "Classic Fountain Plaza", category: "Architecture", icon: "🏛️" },
+  { id: "kb2-architecture-fountain-plaza-2", name: "Small Fountain Plaza", category: "Architecture", icon: "🏛️" },
+  { id: "kb2-architecture-fountain-plaza-3", name: "Large Fountain Plaza", category: "Architecture", icon: "🏛️" },
+  { id: "kb2-architecture-fountain-plaza-4", name: "Detailed Fountain Plaza", category: "Architecture", icon: "🏛️" },
+  { id: "kb2-architecture-fountain-plaza-5", name: "Ancient Fountain Plaza", category: "Architecture", icon: "🏛️" },
+  { id: "kb2-industrial-factory-1", name: "Classic Factory", category: "Industrial", icon: "🏭" },
+  { id: "kb2-industrial-factory-2", name: "Small Factory", category: "Industrial", icon: "🏭" },
+  { id: "kb2-industrial-factory-3", name: "Large Factory", category: "Industrial", icon: "🏭" },
+  { id: "kb2-industrial-factory-4", name: "Detailed Factory", category: "Industrial", icon: "🏭" },
+  { id: "kb2-industrial-factory-5", name: "Ancient Factory", category: "Industrial", icon: "🏭" },
+  { id: "kb2-industrial-warehouse-1", name: "Classic Warehouse", category: "Industrial", icon: "🏭" },
+  { id: "kb2-industrial-warehouse-2", name: "Small Warehouse", category: "Industrial", icon: "🏭" },
+  { id: "kb2-industrial-warehouse-3", name: "Large Warehouse", category: "Industrial", icon: "🏭" },
+  { id: "kb2-industrial-warehouse-4", name: "Detailed Warehouse", category: "Industrial", icon: "🏭" },
+  { id: "kb2-industrial-warehouse-5", name: "Ancient Warehouse", category: "Industrial", icon: "🏭" },
+  { id: "kb2-industrial-water-tank-1", name: "Classic Water Tank", category: "Industrial", icon: "🏭" },
+  { id: "kb2-industrial-water-tank-2", name: "Small Water Tank", category: "Industrial", icon: "🏭" },
+  { id: "kb2-industrial-water-tank-3", name: "Large Water Tank", category: "Industrial", icon: "🏭" },
+  { id: "kb2-industrial-water-tank-4", name: "Detailed Water Tank", category: "Industrial", icon: "🏭" },
+  { id: "kb2-industrial-water-tank-5", name: "Ancient Water Tank", category: "Industrial", icon: "🏭" },
+  { id: "kb2-industrial-generator-1", name: "Classic Generator", category: "Industrial", icon: "🏭" },
+  { id: "kb2-industrial-generator-2", name: "Small Generator", category: "Industrial", icon: "🏭" },
+  { id: "kb2-industrial-generator-3", name: "Large Generator", category: "Industrial", icon: "🏭" },
+  { id: "kb2-industrial-generator-4", name: "Detailed Generator", category: "Industrial", icon: "🏭" },
+  { id: "kb2-industrial-generator-5", name: "Ancient Generator", category: "Industrial", icon: "🏭" },
+  { id: "kb2-industrial-solar-panel-1", name: "Classic Solar Panel", category: "Industrial", icon: "🏭" },
+  { id: "kb2-industrial-solar-panel-2", name: "Small Solar Panel", category: "Industrial", icon: "🏭" },
+  { id: "kb2-industrial-solar-panel-3", name: "Large Solar Panel", category: "Industrial", icon: "🏭" },
+  { id: "kb2-industrial-solar-panel-4", name: "Detailed Solar Panel", category: "Industrial", icon: "🏭" },
+  { id: "kb2-industrial-solar-panel-5", name: "Ancient Solar Panel", category: "Industrial", icon: "🏭" },
+  { id: "kb2-industrial-wind-turbine-1", name: "Classic Wind Turbine", category: "Industrial", icon: "🏭" },
+  { id: "kb2-industrial-wind-turbine-2", name: "Small Wind Turbine", category: "Industrial", icon: "🏭" },
+  { id: "kb2-industrial-wind-turbine-3", name: "Large Wind Turbine", category: "Industrial", icon: "🏭" },
+  { id: "kb2-industrial-wind-turbine-4", name: "Detailed Wind Turbine", category: "Industrial", icon: "🏭" },
+  { id: "kb2-industrial-wind-turbine-5", name: "Ancient Wind Turbine", category: "Industrial", icon: "🏭" },
+  { id: "kb2-industrial-crane-1", name: "Classic Crane", category: "Industrial", icon: "🏭" },
+  { id: "kb2-industrial-crane-2", name: "Small Crane", category: "Industrial", icon: "🏭" },
+  { id: "kb2-industrial-crane-3", name: "Large Crane", category: "Industrial", icon: "🏭" },
+  { id: "kb2-industrial-crane-4", name: "Detailed Crane", category: "Industrial", icon: "🏭" },
+  { id: "kb2-industrial-crane-5", name: "Ancient Crane", category: "Industrial", icon: "🏭" },
+  { id: "kb2-industrial-conveyor-1", name: "Classic Conveyor", category: "Industrial", icon: "🏭" },
+  { id: "kb2-industrial-conveyor-2", name: "Small Conveyor", category: "Industrial", icon: "🏭" },
+  { id: "kb2-industrial-conveyor-3", name: "Large Conveyor", category: "Industrial", icon: "🏭" },
+  { id: "kb2-industrial-conveyor-4", name: "Detailed Conveyor", category: "Industrial", icon: "🏭" },
+  { id: "kb2-industrial-conveyor-5", name: "Ancient Conveyor", category: "Industrial", icon: "🏭" },
+  { id: "kb2-industrial-storage-silo-1", name: "Classic Storage Silo", category: "Industrial", icon: "🏭" },
+  { id: "kb2-industrial-storage-silo-2", name: "Small Storage Silo", category: "Industrial", icon: "🏭" },
+  { id: "kb2-industrial-storage-silo-3", name: "Large Storage Silo", category: "Industrial", icon: "🏭" },
+  { id: "kb2-industrial-storage-silo-4", name: "Detailed Storage Silo", category: "Industrial", icon: "🏭" },
+  { id: "kb2-industrial-storage-silo-5", name: "Ancient Storage Silo", category: "Industrial", icon: "🏭" },
+  { id: "kb2-industrial-power-station-1", name: "Classic Power Station", category: "Industrial", icon: "🏭" },
+  { id: "kb2-industrial-power-station-2", name: "Small Power Station", category: "Industrial", icon: "🏭" },
+  { id: "kb2-industrial-power-station-3", name: "Large Power Station", category: "Industrial", icon: "🏭" },
+  { id: "kb2-industrial-power-station-4", name: "Detailed Power Station", category: "Industrial", icon: "🏭" },
+  { id: "kb2-industrial-power-station-5", name: "Ancient Power Station", category: "Industrial", icon: "🏭" },
+  { id: "kb2-fantasy-dragon-statue-1", name: "Classic Dragon Statue", category: "Fantasy", icon: "🐉" },
+  { id: "kb2-fantasy-dragon-statue-2", name: "Small Dragon Statue", category: "Fantasy", icon: "🐉" },
+  { id: "kb2-fantasy-dragon-statue-3", name: "Large Dragon Statue", category: "Fantasy", icon: "🐉" },
+  { id: "kb2-fantasy-dragon-statue-4", name: "Detailed Dragon Statue", category: "Fantasy", icon: "🐉" },
+  { id: "kb2-fantasy-dragon-statue-5", name: "Ancient Dragon Statue", category: "Fantasy", icon: "🐉" },
+  { id: "kb2-fantasy-magic-tower-1", name: "Classic Magic Tower", category: "Fantasy", icon: "🐉" },
+  { id: "kb2-fantasy-magic-tower-2", name: "Small Magic Tower", category: "Fantasy", icon: "🐉" },
+  { id: "kb2-fantasy-magic-tower-3", name: "Large Magic Tower", category: "Fantasy", icon: "🐉" },
+  { id: "kb2-fantasy-magic-tower-4", name: "Detailed Magic Tower", category: "Fantasy", icon: "🐉" },
+  { id: "kb2-fantasy-magic-tower-5", name: "Ancient Magic Tower", category: "Fantasy", icon: "🐉" },
+  { id: "kb2-fantasy-crystal-1", name: "Classic Crystal", category: "Fantasy", icon: "🐉" },
+  { id: "kb2-fantasy-crystal-2", name: "Small Crystal", category: "Fantasy", icon: "🐉" },
+  { id: "kb2-fantasy-crystal-3", name: "Large Crystal", category: "Fantasy", icon: "🐉" },
+  { id: "kb2-fantasy-crystal-4", name: "Detailed Crystal", category: "Fantasy", icon: "🐉" },
+  { id: "kb2-fantasy-crystal-5", name: "Ancient Crystal", category: "Fantasy", icon: "🐉" },
+  { id: "kb2-fantasy-portal-1", name: "Classic Portal", category: "Fantasy", icon: "🐉" },
+  { id: "kb2-fantasy-portal-2", name: "Small Portal", category: "Fantasy", icon: "🐉" },
+  { id: "kb2-fantasy-portal-3", name: "Large Portal", category: "Fantasy", icon: "🐉" },
+  { id: "kb2-fantasy-portal-4", name: "Detailed Portal", category: "Fantasy", icon: "🐉" },
+  { id: "kb2-fantasy-portal-5", name: "Ancient Portal", category: "Fantasy", icon: "🐉" },
+  { id: "kb2-fantasy-ancient-ruin-1", name: "Classic Ancient Ruin", category: "Fantasy", icon: "🐉" },
+  { id: "kb2-fantasy-ancient-ruin-2", name: "Small Ancient Ruin", category: "Fantasy", icon: "🐉" },
+  { id: "kb2-fantasy-ancient-ruin-3", name: "Large Ancient Ruin", category: "Fantasy", icon: "🐉" },
+  { id: "kb2-fantasy-ancient-ruin-4", name: "Detailed Ancient Ruin", category: "Fantasy", icon: "🐉" },
+  { id: "kb2-fantasy-ancient-ruin-5", name: "Ancient Ancient Ruin", category: "Fantasy", icon: "🐉" },
+  { id: "kb2-fantasy-floating-island-1", name: "Classic Floating Island", category: "Fantasy", icon: "🐉" },
+  { id: "kb2-fantasy-floating-island-2", name: "Small Floating Island", category: "Fantasy", icon: "🐉" },
+  { id: "kb2-fantasy-floating-island-3", name: "Large Floating Island", category: "Fantasy", icon: "🐉" },
+  { id: "kb2-fantasy-floating-island-4", name: "Detailed Floating Island", category: "Fantasy", icon: "🐉" },
+  { id: "kb2-fantasy-floating-island-5", name: "Ancient Floating Island", category: "Fantasy", icon: "🐉" },
+  { id: "kb2-fantasy-fantasy-tree-1", name: "Classic Fantasy Tree", category: "Fantasy", icon: "🐉" },
+  { id: "kb2-fantasy-fantasy-tree-2", name: "Small Fantasy Tree", category: "Fantasy", icon: "🐉" },
+  { id: "kb2-fantasy-fantasy-tree-3", name: "Large Fantasy Tree", category: "Fantasy", icon: "🐉" },
+  { id: "kb2-fantasy-fantasy-tree-4", name: "Detailed Fantasy Tree", category: "Fantasy", icon: "🐉" },
+  { id: "kb2-fantasy-fantasy-tree-5", name: "Ancient Fantasy Tree", category: "Fantasy", icon: "🐉" },
+  { id: "kb2-fantasy-treasure-chest-1", name: "Classic Treasure Chest", category: "Fantasy", icon: "🐉" },
+  { id: "kb2-fantasy-treasure-chest-2", name: "Small Treasure Chest", category: "Fantasy", icon: "🐉" },
+  { id: "kb2-fantasy-treasure-chest-3", name: "Large Treasure Chest", category: "Fantasy", icon: "🐉" },
+  { id: "kb2-fantasy-treasure-chest-4", name: "Detailed Treasure Chest", category: "Fantasy", icon: "🐉" },
+  { id: "kb2-fantasy-treasure-chest-5", name: "Ancient Treasure Chest", category: "Fantasy", icon: "🐉" },
+  { id: "kb2-fantasy-obelisk-1", name: "Classic Obelisk", category: "Fantasy", icon: "🐉" },
+  { id: "kb2-fantasy-obelisk-2", name: "Small Obelisk", category: "Fantasy", icon: "🐉" },
+  { id: "kb2-fantasy-obelisk-3", name: "Large Obelisk", category: "Fantasy", icon: "🐉" },
+  { id: "kb2-fantasy-obelisk-4", name: "Detailed Obelisk", category: "Fantasy", icon: "🐉" },
+  { id: "kb2-fantasy-obelisk-5", name: "Ancient Obelisk", category: "Fantasy", icon: "🐉" },
+  { id: "kb2-fantasy-magic-altar-1", name: "Classic Magic Altar", category: "Fantasy", icon: "🐉" },
+  { id: "kb2-fantasy-magic-altar-2", name: "Small Magic Altar", category: "Fantasy", icon: "🐉" },
+  { id: "kb2-fantasy-magic-altar-3", name: "Large Magic Altar", category: "Fantasy", icon: "🐉" },
+  { id: "kb2-fantasy-magic-altar-4", name: "Detailed Magic Altar", category: "Fantasy", icon: "🐉" },
+  { id: "kb2-fantasy-magic-altar-5", name: "Ancient Magic Altar", category: "Fantasy", icon: "🐉" },
+  { id: "kb2-food-apple-1", name: "Classic Apple", category: "Food", icon: "🍎" },
+  { id: "kb2-food-apple-2", name: "Small Apple", category: "Food", icon: "🍎" },
+  { id: "kb2-food-apple-3", name: "Large Apple", category: "Food", icon: "🍎" },
+  { id: "kb2-food-apple-4", name: "Detailed Apple", category: "Food", icon: "🍎" },
+  { id: "kb2-food-apple-5", name: "Ancient Apple", category: "Food", icon: "🍎" },
+  { id: "kb2-food-bread-loaf-1", name: "Classic Bread Loaf", category: "Food", icon: "🍎" },
+  { id: "kb2-food-bread-loaf-2", name: "Small Bread Loaf", category: "Food", icon: "🍎" },
+  { id: "kb2-food-bread-loaf-3", name: "Large Bread Loaf", category: "Food", icon: "🍎" },
+  { id: "kb2-food-bread-loaf-4", name: "Detailed Bread Loaf", category: "Food", icon: "🍎" },
+  { id: "kb2-food-bread-loaf-5", name: "Ancient Bread Loaf", category: "Food", icon: "🍎" },
+  { id: "kb2-food-burger-1", name: "Classic Burger", category: "Food", icon: "🍎" },
+  { id: "kb2-food-burger-2", name: "Small Burger", category: "Food", icon: "🍎" },
+  { id: "kb2-food-burger-3", name: "Large Burger", category: "Food", icon: "🍎" },
+  { id: "kb2-food-burger-4", name: "Detailed Burger", category: "Food", icon: "🍎" },
+  { id: "kb2-food-burger-5", name: "Ancient Burger", category: "Food", icon: "🍎" },
+  { id: "kb2-food-pizza-1", name: "Classic Pizza", category: "Food", icon: "🍎" },
+  { id: "kb2-food-pizza-2", name: "Small Pizza", category: "Food", icon: "🍎" },
+  { id: "kb2-food-pizza-3", name: "Large Pizza", category: "Food", icon: "🍎" },
+  { id: "kb2-food-pizza-4", name: "Detailed Pizza", category: "Food", icon: "🍎" },
+  { id: "kb2-food-pizza-5", name: "Ancient Pizza", category: "Food", icon: "🍎" },
+  { id: "kb2-food-cake-1", name: "Classic Cake", category: "Food", icon: "🍎" },
+  { id: "kb2-food-cake-2", name: "Small Cake", category: "Food", icon: "🍎" },
+  { id: "kb2-food-cake-3", name: "Large Cake", category: "Food", icon: "🍎" },
+  { id: "kb2-food-cake-4", name: "Detailed Cake", category: "Food", icon: "🍎" },
+  { id: "kb2-food-cake-5", name: "Ancient Cake", category: "Food", icon: "🍎" },
+  { id: "kb2-food-watermelon-1", name: "Classic Watermelon", category: "Food", icon: "🍎" },
+  { id: "kb2-food-watermelon-2", name: "Small Watermelon", category: "Food", icon: "🍎" },
+  { id: "kb2-food-watermelon-3", name: "Large Watermelon", category: "Food", icon: "🍎" },
+  { id: "kb2-food-watermelon-4", name: "Detailed Watermelon", category: "Food", icon: "🍎" },
+  { id: "kb2-food-watermelon-5", name: "Ancient Watermelon", category: "Food", icon: "🍎" },
+  { id: "kb2-food-pumpkin-1", name: "Classic Pumpkin", category: "Food", icon: "🍎" },
+  { id: "kb2-food-pumpkin-2", name: "Small Pumpkin", category: "Food", icon: "🍎" },
+  { id: "kb2-food-pumpkin-3", name: "Large Pumpkin", category: "Food", icon: "🍎" },
+  { id: "kb2-food-pumpkin-4", name: "Detailed Pumpkin", category: "Food", icon: "🍎" },
+  { id: "kb2-food-pumpkin-5", name: "Ancient Pumpkin", category: "Food", icon: "🍎" },
+  { id: "kb2-food-mushroom-1", name: "Classic Mushroom", category: "Food", icon: "🍎" },
+  { id: "kb2-food-mushroom-2", name: "Small Mushroom", category: "Food", icon: "🍎" },
+  { id: "kb2-food-mushroom-3", name: "Large Mushroom", category: "Food", icon: "🍎" },
+  { id: "kb2-food-mushroom-4", name: "Detailed Mushroom", category: "Food", icon: "🍎" },
+  { id: "kb2-food-mushroom-5", name: "Ancient Mushroom", category: "Food", icon: "🍎" },
+  { id: "kb2-food-fish-1", name: "Classic Fish", category: "Food", icon: "🍎" },
+  { id: "kb2-food-fish-2", name: "Small Fish", category: "Food", icon: "🍎" },
+  { id: "kb2-food-fish-3", name: "Large Fish", category: "Food", icon: "🍎" },
+  { id: "kb2-food-fish-4", name: "Detailed Fish", category: "Food", icon: "🍎" },
+  { id: "kb2-food-fish-5", name: "Ancient Fish", category: "Food", icon: "🍎" },
+  { id: "kb2-food-ice-cream-1", name: "Classic Ice Cream", category: "Food", icon: "🍎" },
+  { id: "kb2-food-ice-cream-2", name: "Small Ice Cream", category: "Food", icon: "🍎" },
+  { id: "kb2-food-ice-cream-3", name: "Large Ice Cream", category: "Food", icon: "🍎" },
+  { id: "kb2-food-ice-cream-4", name: "Detailed Ice Cream", category: "Food", icon: "🍎" },
+  { id: "kb2-food-ice-cream-5", name: "Ancient Ice Cream", category: "Food", icon: "🍎" }
+
 ];
 
-function createAsset(assetId: string): THREE.Group {
+function createLegacyAsset(assetId: string): THREE.Group {
   const group = new THREE.Group();
 
   const material = (color: string, roughness = 0.8) =>
@@ -502,6 +1089,329 @@ function createAsset(assetId: string): THREE.Group {
   return group;
 }
 
+function createAsset(assetId: string): THREE.Group {
+  if (!assetId.startsWith("kb2-")) return createLegacyAsset(assetId);
+
+  const def = assetCatalog.find(a => a.id === assetId);
+  const name = def?.name ?? assetId;
+  const category = def?.category ?? "Props";
+  const variant = Number(assetId.match(/-(\d)$/)?.[1] ?? 1);
+  const seed = [...assetId].reduce((n, c) => (n * 31 + c.charCodeAt(0)) >>> 0, 7);
+  const rand = (n: number) => ((seed * (n + 17) * 2654435761) >>> 0) / 4294967295;
+  const scale = [0.85, 1, 1.2, 1.08, 0.94][variant - 1] ?? 1;
+  const group = new THREE.Group();
+  group.name = name;
+  group.userData.objectType = name;
+  group.userData.assetId = assetId;
+
+  const palettes: Record<string, string[]> = {
+    Buildings: ["#d9b99b","#b8c6d9","#d8d1c1","#9eafbd","#c69b79"],
+    Nature: ["#398b52","#559b62","#7b9a55","#a2a76a","#765b43"],
+    Vehicles: ["#d84d50","#397eae","#d6a83d","#5b9c79","#7e6bb1"],
+    Furniture: ["#98704c","#76543a","#c3a47d","#657c91","#a6a09a"],
+    Props: ["#657486","#c69b52","#788c91","#9a6557","#566b7d"],
+    Characters: ["#477aa2","#b47c55","#71946c","#9c719d","#c3a56b"],
+    Architecture: ["#a7a39a","#b8a88b","#817c76","#c2b9a5","#887c9a"],
+    Industrial: ["#677987","#b18b48","#657b65","#8b929a","#a56d4e"],
+    Fantasy: ["#7058a6","#4b8b9b","#9b6ca2","#6b9b80","#c09b52"],
+    Food: ["#d99a48","#bd604b","#d7c18a","#76a85b","#e3b5a0"]
+  };
+  const colors = palettes[category] ?? palettes.Props;
+  const main = colors[Math.floor(rand(1) * colors.length)];
+  const accent = colors[Math.floor(rand(2) * colors.length)];
+  const dark = "#343b46";
+  const glass = "#8bd5f4";
+
+  const mat = (color: string) => new THREE.MeshStandardMaterial({
+    color, roughness: 0.72, metalness: category === "Industrial" ? 0.35 : 0.05
+  });
+  const add = (geo: THREE.BufferGeometry, color: string, x: number, y: number, z: number,
+    rx = 0, ry = 0, rz = 0) => {
+    const m = new THREE.Mesh(geo, mat(color));
+    m.position.set(x, y, z);
+    m.rotation.set(rx, ry, rz);
+    m.castShadow = true;
+    m.receiveShadow = true;
+    group.add(m);
+    return m;
+  };
+  const box = (w: number, h: number, d: number, c: string, x: number, y: number, z: number) =>
+    add(new THREE.BoxGeometry(w * scale, h * scale, d * scale), c, x * scale, y * scale, z * scale);
+  const cyl = (r1: number, r2: number, h: number, c: string, x: number, y: number, z: number, seg = 16, rx = 0) =>
+    add(new THREE.CylinderGeometry(r1 * scale, r2 * scale, h * scale, seg), c, x * scale, y * scale, z * scale, rx);
+  const ball = (r: number, c: string, x: number, y: number, z: number) =>
+    add(new THREE.SphereGeometry(r * scale, 16, 12), c, x * scale, y * scale, z * scale);
+  const cone = (r: number, h: number, c: string, x: number, y: number, z: number, seg = 8) =>
+    add(new THREE.ConeGeometry(r * scale, h * scale, seg), c, x * scale, y * scale, z * scale);
+  const torus = (r: number, tube: number, c: string, x: number, y: number, z: number, rx = 0) =>
+    add(new THREE.TorusGeometry(r * scale, tube * scale, 10, 32), c, x * scale, y * scale, z * scale, rx);
+  const word = name.toLowerCase();
+
+  if (category === "Buildings") {
+    const tall = /tower|skyscraper|apartment|office/.test(word);
+    const w = tall ? 1.65 : 2.1;
+    const h = tall ? 3.5 + variant * 0.65 : 1.65 + rand(3) * 0.5;
+    box(w, h, 1.8, main, 0, h / 2, 0);
+    if (/house|villa|cabin|wooden/.test(word)) {
+      cone(1.65, 1.15, accent, 0, h + 0.5, 0, 4);
+    } else {
+      box(w + 0.18, 0.16, 1.98, accent, 0, h + 0.08, 0);
+      if (tall) box(1.15, 0.35, 1.25, accent, 0, h + 0.28, 0);
+    }
+    for (let y = 0.55; y < h - 0.1; y += 0.62) {
+      for (let x = -w / 2 + 0.35; x < w / 2; x += 0.58) {
+        box(0.32, 0.34, 0.035, glass, x, y, 0.92);
+      }
+    }
+    box(0.48, 0.9, 0.08, dark, 0, 0.45, 0.94);
+    if (/castle/.test(word)) for (const x of [-1.3, 1.3]) {
+      for (const z of [-0.75, 0.75]) {
+        box(0.55, 2.7, 0.55, accent, x, 1.35, z);
+        cone(0.48, 0.8, dark, x, 3.1, z, 4);
+      }
+    }
+    if (/school|hospital|mall/.test(word)) {
+      box(2.3, 0.18, 0.3, accent, 0, 1.9, 1.02);
+      for (const x of [-0.7, 0, 0.7]) box(0.12, 0.7, 0.12, accent, x, 0.85, 1.12);
+    }
+  } else if (category === "Nature") {
+    if (/mountain|rock|stone/.test(word)) {
+      add(new THREE.DodecahedronGeometry((0.8 + rand(4) * 0.45) * scale, 1), main, 0, 0.55 * scale, 0);
+      if (/mountain/.test(word)) {
+        cone(0.95, 2.5, accent, 0, 1.25, 0, 6);
+        cone(0.42, 0.85, "#e8e8e8", 0, 2.2, 0, 5);
+      }
+    } else if (/flower|mushroom/.test(word)) {
+      cyl(0.045, 0.07, 0.9, "#4b9958", 0, 0.45, 0);
+      if (/mushroom/.test(word)) {
+        ball(0.48, accent, 0, 0.95, 0);
+      } else {
+        ball(0.13, "#e8c94b", 0, 1, 0);
+        for (let i = 0; i < 7; i++) {
+          const a = i * Math.PI * 2 / 7;
+          ball(0.17, main, Math.cos(a) * 0.23, 1, Math.sin(a) * 0.23);
+        }
+      }
+    } else if (/grass|bush|cactus/.test(word)) {
+      if (/cactus/.test(word)) {
+        cyl(0.24, 0.24, 1.6, "#3c9860", 0, 0.8, 0);
+        cyl(0.13, 0.13, 0.7, "#3c9860", 0.3, 0.9, 0, 12, Math.PI / 2);
+        cyl(0.13, 0.13, 0.55, "#3c9860", 0.3, 1.2, 0);
+      } else for (let i = 0; i < 9; i++) {
+        const a = i * 2.4;
+        cone(0.25 + rand(i) * 0.18, 0.7 + rand(i + 8) * 0.55, main,
+          Math.cos(a) * 0.35, 0.35, Math.sin(a) * 0.35, 6);
+      }
+    } else if (/waterfall/.test(word)) {
+      add(new THREE.DodecahedronGeometry(1, 1), dark, 0, 0.8, 0);
+      box(0.75, 1.8, 0.15, "#64c5e8", 0, 1.1, 0.65);
+      box(1.8, 0.12, 0.8, "#64c5e8", 0, 0.12, 0.3);
+    } else {
+      cyl(0.2, 0.28, 1.7, "#765039", 0, 0.85, 0);
+      ball(0.8, main, 0, 1.95, 0);
+      ball(0.58, accent, -0.45, 2.15, 0.12);
+      ball(0.58, main, 0.45, 2.1, -0.12);
+      if (/pine/.test(word)) {
+        cone(0.95, 1.6, main, 0, 2, 0);
+        cone(0.72, 1.3, accent, 0, 2.8, 0);
+      }
+      if (/palm/.test(word)) for (let i = 0; i < 6; i++) {
+        const a = i * Math.PI / 3;
+        add(new THREE.ConeGeometry(0.18 * scale, 1.6 * scale, 5),
+          "#48a85c", Math.cos(a) * 0.7 * scale, 2.8 * scale, Math.sin(a) * 0.7 * scale, 0, 0, -Math.cos(a) * 0.5);
+      }
+    }
+  } else if (category === "Vehicles") {
+    const aircraft = /plane|aircraft/.test(word);
+    const bike = /bike|motorcycle|scooter/.test(word);
+    const bus = /bus|truck|van/.test(word);
+    const length = aircraft ? 3.8 : bus ? 3.2 : 2.5;
+    box(aircraft ? 0.65 : 1.55, 0.45, length, main, 0, 0.72, 0);
+    if (aircraft) {
+      box(3.5, 0.12, 0.75, accent, 0, 0.85, 0);
+      box(1.2, 0.1, 0.42, accent, 0, 1.05, -1.5);
+      cone(0.22, 0.6, dark, 0, 1.15, 1.8, 12);
+    } else {
+      box(1.25, bus ? 1.1 : 0.65, bus ? 1.5 : 1.1, accent, 0, bus ? 1.35 : 1.1, -0.25);
+      box(1.08, 0.38, 0.035, glass, 0, 1.42, 0.32);
+      if (bike) {
+        for (const z of [-0.8, 0.8]) {
+          torus(0.34, 0.09, dark, 0, 0.38, z, Math.PI / 2);
+          cyl(0.07, 0.07, 0.7, accent, 0, 0.72, z, 10, Math.PI / 2);
+        }
+        cyl(0.035, 0.035, 1.1, dark, 0, 1.25, -0.4, 8, Math.PI / 3);
+      } else {
+        for (const x of [-0.85, 0.85]) for (const z of [-0.8, 0.8]) {
+          add(new THREE.CylinderGeometry(0.34 * scale, 0.34 * scale, 0.2 * scale, 20),
+            dark, x * scale, 0.38 * scale, z * scale, 0, 0, Math.PI / 2);
+          cyl(0.16, 0.16, 0.22, "#aab5bd", x, 0.38, z, 16, Math.PI / 2);
+        }
+      }
+    }
+    for (const x of [-0.48, 0.48]) box(0.18, 0.14, 0.05, "#fff0a8", x, 0.75, length / 2);
+  } else if (category === "Furniture") {
+    if (/chair|seat|sofa/.test(word)) {
+      box(1.4, 0.18, 1.25, main, 0, 0.85, 0);
+      box(1.4, /sofa/.test(word) ? 0.8 : 1.1, 0.18, accent, 0, 1.35, -0.55);
+      for (const x of [-0.58, 0.58]) {
+        box(0.15, 0.65, 0.15, dark, x, 0.35, 0);
+        if (/sofa/.test(word)) box(0.18, 0.65, 1.1, accent, x, 1.1, 0);
+      }
+    } else if (/bed/.test(word)) {
+      box(1.8, 0.3, 2.5, main, 0, 0.48, 0);
+      box(1.72, 0.2, 2.1, "#e2e3e8", 0, 0.72, 0.1);
+      box(1.8, 0.8, 0.14, accent, 0, 0.8, -1.2);
+      for (const x of [-0.48, 0.48]) box(0.65, 0.16, 0.42, "#f5f3ed", x, 0.9, -0.72);
+    } else {
+      box(2, 0.16, 1.3, main, 0, 1.05, 0);
+      for (const x of [-0.85, 0.85]) for (const z of [-0.5, 0.5]) {
+        box(0.12, 1, 0.12, accent, x, 0.5, z);
+      }
+      if (/bookshelf|shelf|cabinet|wardrobe/.test(word)) {
+        box(1.8, 2.1, 0.35, main, 0, 1.05, -0.52);
+        for (let y = 0.5; y < 2; y += 0.48) box(1.7, 0.07, 0.32, accent, 0, y, -0.28);
+      }
+      if (/computer|gaming/.test(word)) {
+        box(0.9, 0.6, 0.08, dark, 0, 1.45, -0.3);
+        box(0.78, 0.45, 0.025, "#4287bb", 0, 1.46, -0.24);
+        box(0.8, 0.06, 0.35, dark, 0, 1.18, 0.25);
+      }
+    }
+  } else if (category === "Characters") {
+    const robot = /robot|android/.test(word);
+    const head = robot ? 0.38 : 0.34;
+    cyl(0.34, 0.48, 0.9, main, 0, 1.2, 0);
+    ball(head, accent, 0, 2, 0);
+    if (robot) {
+      box(0.5, 0.32, 0.5, accent, 0, 2, 0);
+      for (const x of [-0.14, 0.14]) ball(0.06, "#6bdcff", x, 2.04, 0.27);
+    } else {
+      ball(0.055, dark, -0.12, 2.04, 0.29);
+      ball(0.055, dark, 0.12, 2.04, 0.29);
+    }
+    for (const x of [-0.48, 0.48]) {
+      cyl(0.12, 0.16, 0.85, accent, x, 1.25, 0, 10);
+      ball(0.14, main, x, 0.78, 0);
+      cyl(0.13, 0.16, 0.85, dark, x * 0.55, 0.38, 0);
+    }
+    if (/knight|guard/.test(word)) {
+      box(0.85, 0.14, 0.12, "#b9c2cb", 0, 1.65, 0.35);
+      ball(0.2, "#aeb9c5", 0, 2.32, 0);
+    }
+    if (/astronaut/.test(word)) torus(0.43, 0.08, "#d8e4ed", 0, 2, 0, Math.PI / 2);
+  } else if (category === "Architecture") {
+    if (/pillar|column/.test(word)) {
+      cyl(0.55, 0.62, 2.7, main, 0, 1.35, 0, 12);
+      cyl(0.72, 0.72, 0.18, accent, 0, 2.75, 0, 12);
+      cyl(0.72, 0.72, 0.18, accent, 0, 0.09, 0, 12);
+      for (let i = 0; i < 8; i++) {
+        const a = i * Math.PI / 4;
+        box(0.06, 2.2, 0.06, accent, Math.cos(a) * 0.53, 1.35, Math.sin(a) * 0.53);
+      }
+    } else {
+      box(2.8, 0.22, 2.1, main, 0, 0.12, 0);
+      for (const x of [-1, 0, 1]) {
+        cyl(0.14, 0.18, 2, accent, x, 1.15, -0.65, 12);
+      }
+      box(3.1, 0.2, 0.3, accent, 0, 2.2, -0.65);
+      if (/arch|aqueduct|gate/.test(word)) {
+        torus(0.95, 0.16, accent, 0, 1.9, 0.2, Math.PI / 2);
+      } else {
+        cone(1.65, 1.1, accent, 0, 2.85, 0, 4);
+      }
+    }
+  } else if (category === "Industrial") {
+    if (/wind|turbine/.test(word)) {
+      cyl(0.12, 0.2, 2.8, main, 0, 1.4, 0);
+      ball(0.22, accent, 0, 2.85, 0);
+      for (let i = 0; i < 3; i++) {
+        const a = i * Math.PI * 2 / 3;
+        add(new THREE.BoxGeometry(0.16 * scale, 1.45 * scale, 0.12 * scale), accent, Math.sin(a) * 0.65 * scale, (3.45 + Math.cos(a) * 0.65) * scale, 0, 0, 0, -a);
+
+      }
+    } else if (/crane/.test(word)) {
+      box(0.25, 3.4, 0.25, main, 0, 1.7, 0);
+      box(3.5, 0.2, 0.22, accent, 1.5, 3.3, 0);
+      box(0.12, 1.4, 0.12, dark, 2.8, 2.55, 0);
+      box(0.45, 0.35, 0.45, main, 0, 0.18, 0);
+    } else if (/tank|silo|boiler/.test(word)) {
+      cyl(0.85, 0.85, 2.1, main, 0, 1.15, 0, 24);
+      ball(0.84, accent, 0, 2.2, 0);
+      cyl(0.12, 0.12, 0.55, dark, 0, 3, 0);
+      for (const x of [-0.6, 0.6]) box(0.12, 0.5, 0.12, dark, x, 0.25, 0);
+    } else {
+      box(2.5, 1.6, 1.8, main, 0, 0.8, 0);
+      box(2.6, 0.2, 1.9, accent, 0, 1.65, 0);
+      for (let x = -0.8; x <= 0.8; x += 0.8) {
+        box(0.42, 0.55, 0.08, glass, x, 1.1, 0.93);
+      }
+      cyl(0.18, 0.18, 0.6, dark, 0.8, 2, 0, 12);
+    }
+  } else if (category === "Fantasy") {
+    if (/crystal/.test(word)) {
+      add(new THREE.OctahedronGeometry(0.9 * scale, 1), accent, 0, 1.1 * scale, 0);
+      add(new THREE.OctahedronGeometry(0.45 * scale, 0), "#8be7ef", 0.7 * scale, 0.65 * scale, 0.1);
+      add(new THREE.OctahedronGeometry(0.38 * scale, 0), main, -0.65 * scale, 0.5 * scale, 0.1);
+    } else if (/portal/.test(word)) {
+      torus(1.05, 0.16, accent, 0, 1.35, 0, Math.PI / 2);
+      torus(0.83, 0.06, "#70d7ef", 0, 1.35, 0, Math.PI / 2);
+      box(2.5, 0.18, 0.55, dark, 0, 0.1, 0);
+      for (const x of [-1.15, 1.15]) box(0.18, 2.5, 0.18, main, x, 1.3, 0);
+    } else {
+      cyl(0.7, 1, 2.4, main, 0, 1.2, 0, 8);
+      cone(0.95, 1.25, accent, 0, 3, 0, 6);
+      for (let i = 0; i < 4; i++) ball(0.12, "#79e5ee", Math.sin(i * 1.6), 1 + i * 0.5, 0.7);
+      if (/dragon/.test(word)) {
+        ball(0.48, accent, 0, 2.5, 0);
+        cone(0.2, 0.8, main, -0.55, 2.9, 0, 5);
+        cone(0.2, 0.8, main, 0.55, 2.9, 0, 5);
+        box(1.8, 0.12, 0.65, accent, 0, 2, 0);
+      }
+      if (/chest|treasure/.test(word)) {
+        box(1.5, 0.8, 1, "#8c5835", 0, 0.5, 0);
+        box(1.52, 0.2, 1.04, "#d4a83f", 0, 0.95, 0);
+        box(0.18, 0.28, 0.06, "#f2d36b", 0, 0.65, 0.53);
+      }
+    }
+  } else if (category === "Food") {
+    if (/pizza/.test(word)) {
+      cyl(0.95, 0.95, 0.16, "#d7a34e", 0, 0.45, 0, 32);
+      cyl(0.86, 0.86, 0.05, "#c84e3f", 0, 0.56, 0, 32);
+      for (let i = 0; i < 9; i++) ball(0.1, "#e6c75a", Math.sin(i * 2.4) * 0.6, 0.62, Math.cos(i * 2.4) * 0.6);
+    } else if (/bread|loaf/.test(word)) {
+      add(new THREE.SphereGeometry(0.8 * scale, 16, 12), "#c58a48", 0, 0.65 * scale, 0);
+      for (let i = -1; i <= 1; i++) box(0.05, 0.04, 0.65, "#f0d49b", i * 0.35, 1.15, 0);
+    } else if (/ice cream/.test(word)) {
+      cone(0.5, 1.1, "#c99a62", 0, 0.55, 0, 12);
+      ball(0.43, accent, 0, 1.2, 0);
+      ball(0.34, main, 0, 1.5, 0);
+    } else {
+      const round = /apple|orange|watermelon|pumpkin|tomato/.test(word);
+      if (round) {
+        ball(/watermelon/.test(word) ? 0.95 : 0.65, main, 0, 0.75, 0);
+        if (/pumpkin|watermelon/.test(word)) {
+          for (let i = 0; i < 7; i++) torus(0.58, 0.035, accent, 0, 0.75, 0, i * 0.35);
+        }
+        cyl(0.045, 0.07, 0.3, "#477744", 0, 1.38, 0);
+      } else {
+        cyl(0.8, 0.8, 0.3, "#d5a24e", 0, 0.25, 0, 24);
+        ball(0.65, main, 0, 0.8, 0);
+        for (let i = 0; i < 5; i++) ball(0.09, accent, Math.sin(i * 1.3) * 0.4, 1.15, Math.cos(i * 1.3) * 0.4);
+      }
+    }
+  } else {
+    box(1.2, 1.2, 1.2, main, 0, 0.6, 0);
+    torus(0.55, 0.1, accent, 0, 1.3, 0);
+  }
+
+  group.traverse(obj => {
+    if (obj instanceof THREE.Mesh) {
+      obj.castShadow = true;
+      obj.receiveShadow = true;
+    }
+  });
+  return group;
+}
 function renderAssetLibrary(): void {
   const grid = document.querySelector<HTMLDivElement>("#asset-grid")!;
   const search = document.querySelector<HTMLInputElement>("#asset-search")!.value
@@ -889,23 +1799,41 @@ renderer.domElement.addEventListener("pointerdown", event => {
   selectObject(target as THREE.Group | null);
 });
 
+const movementKeys = new Set<string>();
+
 window.addEventListener("keydown", event => {
-  if (event.target instanceof HTMLInputElement) return;
+  if (
+    event.target instanceof HTMLInputElement ||
+    event.target instanceof HTMLTextAreaElement ||
+    (event.target instanceof HTMLElement && event.target.isContentEditable)
+  ) return;
+
+  const key = event.key.toLowerCase();
+
+  if (["w", "a", "s", "d"].includes(key)) {
+    movementKeys.add(key);
+    event.preventDefault();
+    return;
+  }
 
   if (event.key === "Delete" || event.key === "Backspace") {
     deleteSelected();
-  } else if (event.key.toLowerCase() === "w") {
-    setMode("translate");
-  } else if (event.key.toLowerCase() === "e") {
+  } else if (key === "e") {
     setMode("rotate");
-  } else if (event.key.toLowerCase() === "r") {
+  } else if (key === "r") {
     setMode("scale");
-  } else if (event.key.toLowerCase() === "f") {
+  } else if (key === "f") {
     focusSelected();
   } else if (event.key === "Escape") {
     selectObject(null);
   }
 });
+
+window.addEventListener("keyup", event => {
+  movementKeys.delete(event.key.toLowerCase());
+});
+
+window.addEventListener("blur", () => movementKeys.clear());
 
 const resizeObserver = new ResizeObserver(() => {
   const width = container.clientWidth;
@@ -920,8 +1848,36 @@ resizeObserver.observe(container);
 addObject("Cube", true);
 selectObject(null);
 
+const movementClock = new THREE.Clock();
+
 function animate(): void {
   requestAnimationFrame(animate);
+
+  const delta = Math.min(movementClock.getDelta(), 0.05);
+  const direction = new THREE.Vector3();
+  camera.getWorldDirection(direction);
+  direction.y = 0;
+  direction.normalize();
+
+  const right = new THREE.Vector3()
+    .crossVectors(direction, camera.up)
+    .normalize();
+
+  const movement = new THREE.Vector3();
+
+  if (movementKeys.has("w")) movement.add(direction);
+  if (movementKeys.has("s")) movement.sub(direction);
+  if (movementKeys.has("d")) movement.add(right);
+  if (movementKeys.has("a")) movement.sub(right);
+
+  if (movement.lengthSq() > 0) {
+    movement.normalize();
+    movement.multiplyScalar((movementKeys.has("shift") ? 12 : 6) * delta);
+    camera.position.add(movement);
+    orbit.target.add(movement);
+  }
+
+  updateWorldGround();
   orbit.update();
   renderer.render(scene, camera);
 }
@@ -1254,5 +2210,13 @@ function installGltfControls(): void {
 }
 
 installGltfControls();
+
+
+
+
+
+
+
+
 
 
