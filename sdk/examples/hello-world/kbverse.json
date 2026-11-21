@@ -1,0 +1,16 @@
+{
+  "id": "hello-world",
+  "name": "Hello World",
+  "version": "1.0.0",
+  "apiVersion": 1,
+  "author": "KBVERSE SDK",
+  "description": "Official SDK example mod.",
+  "minKBVersion": "2.0.0",
+  "dependencies": [],
+  "permissions": [
+    "notifications",
+    "commands",
+    "scene.write",
+    "storage"
+  ]
+}
