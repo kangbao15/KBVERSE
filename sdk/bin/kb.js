@@ -8,7 +8,9 @@ const TEMPLATE = path.join(SDK_DIR, "templates", "basic");
 export const KB_API_VERSION = 1;
 export const MAX_SOURCE_BYTES = 256000;
 export const KB_PERMISSIONS = Object.freeze(["scene.read", "scene.write", "project.read", "storage", "notifications", "commands"]);
+export const KB_RENDERER_PROFILES = Object.freeze(["auto", "webgl2", "webgpu", "vulkan-bridge", "low-spec"]);
 const PERMISSION_SET = new Set(KB_PERMISSIONS);
+const RENDERER_PROFILE_SET = new Set(KB_RENDERER_PROFILES);
 const ID_REGEX = /^[a-z0-9][a-z0-9._-]{1,63}$/;
 const SEMVER_REGEX = /^\d+\.\d+\.\d+$/;
 const command = process.argv[2] || "help";
@@ -28,13 +30,19 @@ function readProject(target) {
   const st = fs.statSync(abs);
   if (st.isFile()) {
     const pkg = readJson(abs, "mod package");
-    return { manifest: pkg?.manifest, source: pkg?.source, outDir: path.dirname(abs) };
+    return { manifest: pkg?.manifest, source: pkg?.source, outDir: path.dirname(abs), isPackageFile: true, sourcePath: abs };
   }
   const mPath = path.join(abs, "kbverse.json");
   const sPath = path.join(abs, "src", "index.js");
   if (!fs.existsSync(mPath)) throw new Error("Missing kbverse.json");
   if (!fs.existsSync(sPath)) throw new Error("Missing src/index.js");
-  return { manifest: readJson(mPath, "kbverse.json"), source: fs.readFileSync(sPath, "utf8"), outDir: path.join(abs, "dist") };
+  return {
+    manifest: readJson(mPath, "kbverse.json"),
+    source: fs.readFileSync(sPath, "utf8"),
+    outDir: path.join(abs, "dist"),
+    isPackageFile: false,
+    sourcePath: sPath
+  };
 }
 
 export function validateMod(manifest, source) {
@@ -47,6 +55,22 @@ export function validateMod(manifest, source) {
   if (manifest.description !== undefined && (typeof manifest.description !== "string" || manifest.description.length > 1000)) errors.push("Invalid description.");
   if (manifest.author !== undefined && (typeof manifest.author !== "string" || manifest.author.length > 100)) errors.push("Invalid author.");
   if (manifest.minKBVersion && !SEMVER_REGEX.test(manifest.minKBVersion)) errors.push("Invalid minKBVersion.");
+  if (manifest.renderer !== undefined) {
+    if (typeof manifest.renderer === "string") {
+      if (!RENDERER_PROFILE_SET.has(manifest.renderer)) warnings.push("Custom renderer hint: " + manifest.renderer);
+    } else if (typeof manifest.renderer === "object" && !Array.isArray(manifest.renderer)) {
+      if (manifest.renderer.preferred && !RENDERER_PROFILE_SET.has(manifest.renderer.preferred)) {
+        warnings.push("Custom preferred renderer hint: " + manifest.renderer.preferred);
+      }
+      if (Array.isArray(manifest.renderer.supported)) {
+        for (const r of manifest.renderer.supported) {
+          if (typeof r !== "string" || !r.trim()) errors.push("Invalid entry in renderer.supported.");
+        }
+      }
+    } else {
+      errors.push("Invalid renderer field in manifest.");
+    }
+  }
   if (typeof source !== "string" || !source.trim()) errors.push("Mod source is empty.");
   else if (Buffer.byteLength(source, "utf8") > MAX_SOURCE_BYTES) errors.push("Source exceeds the KB Loader 256 KB byte limit.");
 
@@ -111,8 +135,40 @@ function buildProject(target) {
   console.log("\n[KB SDK] Build successful.\nMod: " + pkg.manifest.name + "\nVersion: " + pkg.manifest.version + "\nPackage: " + out + "\nSize: " + Buffer.byteLength(raw, "utf8") + " bytes");
 }
 
+function inspectProject(target) {
+  const proj = readProject(target);
+  const res = validateMod(proj.manifest, proj.source);
+  const bytes = Buffer.byteLength(proj.source || "", "utf8");
+  const rendererInfo = typeof proj.manifest?.renderer === "string"
+    ? proj.manifest.renderer
+    : (proj.manifest?.renderer?.preferred || "auto");
+  console.log("\n[KBVERSE Mod Inspector]");
+  console.log("ID:           " + (proj.manifest?.id ?? "(missing)"));
+  console.log("Name:         " + (proj.manifest?.name ?? "(missing)"));
+  console.log("Version:      " + (proj.manifest?.version ?? "(missing)"));
+  console.log("API Version:  " + (proj.manifest?.apiVersion ?? "(missing)"));
+  console.log("Renderer:     " + rendererInfo);
+  console.log("Permissions:  " + ((proj.manifest?.permissions || []).join(", ") || "(none)"));
+  console.log("Dependencies: " + ((proj.manifest?.dependencies || []).join(", ") || "(none)"));
+  console.log("Source Size:  " + bytes + " / " + MAX_SOURCE_BYTES + " bytes");
+  console.log("Status:       " + (res.errors.length === 0 ? "VALID" : "INVALID (" + res.errors.length + " errors)"));
+  for (const w of res.warnings) console.warn("[WARN] " + w);
+  for (const e of res.errors) console.error("[ERROR] " + e);
+}
+
+function runDoctor(target) {
+  console.log("\n[KBVERSE SDK Doctor]");
+  console.log("Node.js:      " + process.version);
+  console.log("SDK Dir:      " + SDK_DIR);
+  console.log("Template Dir: " + (fs.existsSync(TEMPLATE) ? "OK (" + TEMPLATE + ")" : "MISSING"));
+  console.log("Profiles:     " + KB_RENDERER_PROFILES.join(", "));
+  if (target) {
+    inspectProject(target);
+  }
+}
+
 function printHelp() {
-  console.log("\nKBVERSE SDK CLI\n\n  kb create <folder>\n  kb validate <folder>\n  kb build <folder>\n  kb pack <folder>\n  kb help\n");
+  console.log("\nKBVERSE SDK CLI\n\n  kb create <folder>\n  kb validate <folder>\n  kb inspect <folder>\n  kb build <folder>\n  kb pack <folder>\n  kb doctor [folder]\n  kb help\n");
 }
 
 const isMain = process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url));
@@ -120,7 +176,9 @@ if (isMain) {
   try {
     if (command === "create") { if (!targetArg) throw new Error("Usage: kb create <folder>"); createProject(targetArg); }
     else if (command === "validate") { if (!targetArg) throw new Error("Usage: kb validate <folder>"); const p = readProject(targetArg); printValidation(validateMod(p.manifest, p.source)); console.log("\n[KB SDK] Validation successful: " + p.manifest.id); }
+    else if (command === "inspect") { if (!targetArg) throw new Error("Usage: kb inspect <folder>"); inspectProject(targetArg); }
     else if (command === "build" || command === "pack") { if (!targetArg) throw new Error("Usage: kb build <folder>"); buildProject(targetArg); }
+    else if (command === "doctor") { runDoctor(targetArg); }
     else if (command === "help" || command === "--help" || command === "-h") printHelp();
     else throw new Error("Unknown command: " + command);
   } catch (e) { fail(e.message); }

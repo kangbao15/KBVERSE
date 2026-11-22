@@ -1,5 +1,4 @@
 import * as THREE from "three";
-import { Reflector } from "three/examples/jsm/objects/Reflector.js";
 
 type Permission =
   | "scene.read"
@@ -56,9 +55,6 @@ type Runtime = {
 type LoaderOptions = {
   appVersion: string;
   scene: THREE.Scene;
-  camera?: THREE.PerspectiveCamera;
-  renderer?: THREE.WebGLRenderer;
-  keyLight?: THREE.DirectionalLight;
 };
 
 const DB_NAME = "KBVERSE_MOD_DATABASE";
@@ -87,6 +83,74 @@ const supportedPrimitives = new Set<PrimitiveType>([
 ]);
 
 let dbPromise: Promise<IDBDatabase> | null = null;
+export type KBGLRendererProfile = "auto" | "webgl2" | "webgpu" | "vulkan-bridge" | "low-spec";
+
+let activeRendererProfile: KBGLRendererProfile = "auto";
+
+async function detectRendererCapabilities() {
+  const canvas = document.createElement("canvas");
+  const webgl2 = Boolean(canvas.getContext("webgl2"));
+  const webgl = Boolean(webgl2 || canvas.getContext("webgl") || canvas.getContext("experimental-webgl"));
+  const gpu = (navigator as Navigator & { gpu?: { requestAdapter?: () => Promise<any> } }).gpu;
+  let webgpu = Boolean(gpu);
+  let adapterInfo: Record<string, unknown> | null = null;
+
+  if (gpu?.requestAdapter) {
+    try {
+      const adapter = await gpu.requestAdapter();
+      webgpu = Boolean(adapter);
+      if (adapter && typeof adapter.info === "object" && adapter.info) {
+        adapterInfo = {
+          vendor: adapter.info.vendor || "",
+          architecture: adapter.info.architecture || "",
+          device: adapter.info.device || "",
+          description: adapter.info.description || ""
+        };
+      }
+    } catch {
+      webgpu = false;
+    }
+  }
+
+  const cores = navigator.hardwareConcurrency || 2;
+  const dpr = window.devicePixelRatio || 1;
+  const recommendedProfile: KBGLRendererProfile =
+    cores <= 2 && dpr <= 1.25
+      ? "low-spec"
+      : webgpu
+        ? "webgpu"
+        : webgl2
+          ? "webgl2"
+          : "low-spec";
+
+  return {
+    webgl,
+    webgl2,
+    webgpu,
+    vulkanBridgeAvailable: Boolean(webgpu || webgl2),
+    hardwareConcurrency: cores,
+    devicePixelRatio: dpr,
+    recommendedProfile,
+    activeProfile: activeRendererProfile,
+    adapterInfo
+  };
+}
+
+function disposeObjectTree(obj: THREE.Object3D): void {
+  obj.traverse(child => {
+    const mesh = child as THREE.Mesh;
+    if (mesh.geometry) {
+      mesh.geometry.dispose();
+    }
+    if (mesh.material) {
+      if (Array.isArray(mesh.material)) {
+        mesh.material.forEach(m => m.dispose());
+      } else {
+        mesh.material.dispose();
+      }
+    }
+  });
+}
 let hostScene: THREE.Scene;
 let appVersion = "2.0.0";
 let initialized = false;
@@ -345,170 +409,6 @@ async function restoreOwnedObjects(modId: string): Promise<void> {
     if (exists) continue;
     hostScene.add(makePrimitive(record, modId));
   }
-}
-
-
-function trackRtxExtra(modId: string, obj: THREE.Object3D): void {
-  const list = ownedRtxExtras.get(modId) || [];
-  list.push(obj);
-  ownedRtxExtras.set(modId, list);
-}
-
-function clearRtxExtras(modId: string): number {
-  const list = ownedRtxExtras.get(modId) || [];
-  let count = 0;
-  for (const obj of list) {
-    if (hostScene) hostScene.remove(obj);
-    obj.traverse(child => {
-      const mesh = child as THREE.Mesh;
-      if (mesh.geometry) mesh.geometry.dispose();
-      if (Array.isArray(mesh.material)) mesh.material.forEach(m => m.dispose());
-      else if (mesh.material) mesh.material.dispose();
-    });
-    count++;
-  }
-  ownedRtxExtras.delete(modId);
-  if (rtxMirrorWater && hostScene) {
-    hostScene.remove(rtxMirrorWater);
-    rtxMirrorWater.geometry.dispose();
-    rtxMirrorWater = null;
-  }
-  if (rtxWaterTint && hostScene) {
-    hostScene.remove(rtxWaterTint);
-    rtxWaterTint.geometry.dispose();
-    (rtxWaterTint.material as THREE.Material)?.dispose();
-    rtxWaterTint = null;
-  }
-  if (rtxSkyDome && hostScene) {
-    hostScene.remove(rtxSkyDome);
-    rtxSkyDome.geometry.dispose();
-    (rtxSkyDome.material as THREE.Material)?.dispose();
-    rtxSkyDome = null;
-  }
-  return count;
-}
-
-function applyRtxEnvironment(modId: string, cfg: any): Record<string, any> {
-  if (!hostScene) throw new Error("Scene host is not ready");
-  const skyColor = String(cfg?.skyColor || "#6fb3e8");
-  const horizonColor = String(cfg?.horizonColor || "#cbe7ff");
-  const fogNear = Number.isFinite(Number(cfg?.fogNear)) ? Number(cfg.fogNear) : 28;
-  const fogFar = Number.isFinite(Number(cfg?.fogFar)) ? Number(cfg.fogFar) : 135;
-
-  hostScene.background = new THREE.Color(skyColor);
-  hostScene.fog = new THREE.Fog(horizonColor, fogNear, fogFar);
-
-  if (!rtxSkyDome) {
-    const skyGeo = new THREE.SphereGeometry(220, 32, 24);
-    const skyMat = new THREE.ShaderMaterial({
-      side: THREE.BackSide,
-      depthWrite: false,
-      uniforms: {
-        uTopColor: { value: new THREE.Color(skyColor) },
-        uBottomColor: { value: new THREE.Color(horizonColor) }
-      },
-      vertexShader: `
-        varying vec3 vWorldPos;
-        void main() {
-          vec4 wp = modelMatrix * vec4(position, 1.0);
-          vWorldPos = wp.xyz;
-          gl_Position = projectionMatrix * viewMatrix * wp;
-        }
-      `,
-      fragmentShader: `
-        uniform vec3 uTopColor;
-        uniform vec3 uBottomColor;
-        varying vec3 vWorldPos;
-        void main() {
-          float h = clamp(normalize(vWorldPos).y * 1.45, 0.0, 1.0);
-          vec3 col = mix(uBottomColor, uTopColor, pow(h, 0.65));
-          gl_FragColor = vec4(col, 1.0);
-        }
-      `
-    });
-    rtxSkyDome = new THREE.Mesh(skyGeo, skyMat);
-    rtxSkyDome.frustumCulled = false;
-    hostScene.add(rtxSkyDome);
-  } else {
-    const mat = rtxSkyDome.material as THREE.ShaderMaterial;
-    mat.uniforms.uTopColor.value.set(skyColor);
-    mat.uniforms.uBottomColor.value.set(horizonColor);
-  }
-
-  if (hostKeyLight) {
-    if (cfg?.sunColor) hostKeyLight.color.set(String(cfg.sunColor));
-    if (Number.isFinite(Number(cfg?.sunIntensity))) hostKeyLight.intensity = Number(cfg.sunIntensity);
-    if (Array.isArray(cfg?.sunPosition) && cfg.sunPosition.length === 3) {
-      hostKeyLight.position.set(
-        Number(cfg.sunPosition[0]) || 12,
-        Number(cfg.sunPosition[1]) || 24,
-        Number(cfg.sunPosition[2]) || 14
-      );
-    }
-    if (cfg?.shadows !== false) {
-      hostKeyLight.castShadow = true;
-      hostKeyLight.shadow.mapSize.set(2048, 2048);
-    }
-  }
-
-  if (hostRenderer) {
-    hostRenderer.shadowMap.enabled = cfg?.shadows !== false;
-    hostRenderer.toneMapping = THREE.ACESFilmicToneMapping;
-    if (Number.isFinite(Number(cfg?.exposure))) {
-      hostRenderer.toneMappingExposure = Number(cfg.exposure);
-    }
-  }
-
-  const waterY = Number.isFinite(Number(cfg?.waterLevel)) ? Number(cfg.waterLevel) : 0.08;
-  const waterSize = Number.isFinite(Number(cfg?.waterSize)) ? Number(cfg.waterSize) : 240;
-  if (cfg?.mirrorWater !== false) {
-    if (!rtxMirrorWater) {
-      const geo = new THREE.PlaneGeometry(waterSize, waterSize);
-      rtxMirrorWater = new Reflector(geo, {
-        clipBias: 0.003,
-        textureWidth: Math.max(256, Math.floor((window.innerWidth || 1280) * 0.65)),
-        textureHeight: Math.max(256, Math.floor((window.innerHeight || 720) * 0.65)),
-        color: new THREE.Color(String(cfg?.waterTint || "#b8dcff"))
-      });
-      rtxMirrorWater.rotation.x = -Math.PI / 2;
-      rtxMirrorWater.position.set(0, waterY, 0);
-      hostScene.add(rtxMirrorWater);
-    } else {
-      rtxMirrorWater.position.y = waterY;
-    }
-
-    if (!rtxWaterTint) {
-      const tintGeo = new THREE.PlaneGeometry(waterSize, waterSize);
-      const tintMat = new THREE.MeshStandardMaterial({
-        color: new THREE.Color(String(cfg?.waterColor || "#1f6fa8")),
-        transparent: true,
-        opacity: Number.isFinite(Number(cfg?.waterOpacity)) ? Number(cfg.waterOpacity) : 0.28,
-        roughness: 0.12,
-        metalness: 0.2
-      });
-      rtxWaterTint = new THREE.Mesh(tintGeo, tintMat);
-      rtxWaterTint.rotation.x = -Math.PI / 2;
-      rtxWaterTint.position.set(0, waterY + 0.015, 0);
-      hostScene.add(rtxWaterTint);
-      trackRtxExtra(modId, rtxWaterTint);
-    } else {
-      rtxWaterTint.position.y = waterY + 0.015;
-    }
-  }
-
-  return { ok: true, waterLevel: waterY };
-}
-
-function applyRtxQuality(cfg: any): Record<string, any> {
-  if (!hostRenderer) return { ok: false };
-  const rawScale = Number(cfg?.scale);
-  const scale = Number.isFinite(rawScale) ? Math.min(2, Math.max(0.35, rawScale)) : 1;
-  const baseDpr = Math.min(window.devicePixelRatio || 1, 2);
-  hostRenderer.setPixelRatio(baseDpr * scale);
-  if (Number.isFinite(Number(cfg?.exposure))) {
-    hostRenderer.toneMappingExposure = Number(cfg.exposure);
-  }
-  return { ok: true, scale };
 }
 
 async function createPrimitive(modId: string, input: any): Promise<string> {
@@ -786,15 +686,7 @@ function createRuntime(mod: StoredMod): void {
       setTransform: (id, transform) => request("scene.setTransform", { id, transform }),
       updateStyle: (id, style) => request("scene.updateStyle", { id, style }),
       cloneObject: (id, options) => request("scene.cloneObject", { id, options }),
-      clearOwned: () => request("scene.clearOwned"),
-      addBatch: items => request("scene.addBatch", { items })
-    },
-    camera: {
-      getState: () => request("camera.getState")
-    },
-    graphics: {
-      setEnvironment: config => request("graphics.setEnvironment", config),
-      setQuality: config => request("graphics.setQuality", config)
+      clearOwned: () => request("scene.clearOwned")
     }
   };
 
@@ -943,45 +835,86 @@ async function handleRequest(runtime: Runtime, data: any): Promise<void> {
         result = await cloneOwnPrimitive(id, String(data.data?.id || ""), data.data?.options || {});
         break;
 
-      case "scene.addBatch": {
-        if (!hasPermission(runtime, "scene.write")) throw new Error("Missing scene.write permission");
-        const items = Array.isArray(data.data?.items) ? data.data.items : [];
-        const createdIds: string[] = [];
-        for (const item of items.slice(0, 600)) {
-          createdIds.push(await createPrimitive(id, item));
-        }
-        result = { count: createdIds.length, ids: createdIds };
-        break;
-      }
-
-      case "camera.getState": {
-        const pos = hostCamera ? hostCamera.position : new THREE.Vector3(0, 5, 10);
-        const dir = new THREE.Vector3(0, 0, -1);
-        if (hostCamera) hostCamera.getWorldDirection(dir);
-        result = {
-          position: [pos.x, pos.y, pos.z],
-          direction: [dir.x, dir.y, dir.z]
-        };
-        break;
-      }
-
-      case "graphics.setEnvironment": {
-        if (!hasPermission(runtime, "scene.write")) throw new Error("Missing scene.write permission");
-        result = applyRtxEnvironment(id, data.data || {});
-        break;
-      }
-
-      case "graphics.setQuality": {
-        if (!hasPermission(runtime, "scene.write")) throw new Error("Missing scene.write permission");
-        result = applyRtxQuality(data.data || {});
-        break;
-      }
-
       case "scene.clearOwned":
         if (!hasPermission(runtime, "scene.write")) throw new Error("Missing scene.write permission");
         result = await clearOwnPrimitives(id);
         break;
 
+
+      case "renderer.getInfo": {
+        result = await detectRendererCapabilities();
+        break;
+      }
+
+      case "renderer.setProfile": {
+        const nextProfile = String(data.data?.profile || "auto") as KBGLRendererProfile;
+        const allowedProfiles = new Set<KBGLRendererProfile>(["auto", "webgl2", "webgpu", "vulkan-bridge", "low-spec"]);
+        if (!allowedProfiles.has(nextProfile)) {
+          throw new Error("Unsupported renderer profile: " + nextProfile);
+        }
+        activeRendererProfile = nextProfile;
+        const info = await detectRendererCapabilities();
+        emitToAll("renderer:changed", { profile: activeRendererProfile, capabilities: info });
+        result = info;
+        break;
+      }
+
+      case "scene.listOwnObjects": {
+        if (!hasPermission(runtime, "scene.read")) throw new Error("Missing scene.read permission");
+        result = hostScene.children
+          .filter(o => o.userData?.kbModId === id)
+          .map(o => ({
+            id: o.userData?.kbObjectId,
+            name: o.name,
+            type: o.userData?.kbPrimitiveType || o.type,
+            position: o.position.toArray(),
+            rotation: [o.rotation.x, o.rotation.y, o.rotation.z],
+            scale: o.scale.toArray()
+          }));
+        break;
+      }
+
+      case "scene.addBatch": {
+        if (!hasPermission(runtime, "scene.write")) throw new Error("Missing scene.write permission");
+        const items = Array.isArray(data.data?.items) ? data.data.items : [];
+        if (items.length > 256) throw new Error("Batch size exceeds 256 items");
+        const ids: string[] = [];
+        for (const item of items) {
+          ids.push(await createPrimitive(id, item));
+        }
+        result = ids;
+        break;
+      }
+
+      case "scene.removeBatch": {
+        if (!hasPermission(runtime, "scene.write")) throw new Error("Missing scene.write permission");
+        const targetIds = Array.isArray(data.data?.ids) ? data.data.ids : [];
+        let removedCount = 0;
+        for (const targetId of targetIds) {
+          const found = hostScene.children.find(
+            o => o.userData?.kbModId === id && o.userData?.kbObjectId === String(targetId)
+          );
+          if (found) {
+            disposeObjectTree(found);
+            hostScene.remove(found);
+            removedCount++;
+          }
+        }
+        result = removedCount;
+        break;
+      }
+
+      case "scene.setTransformBatch": {
+        if (!hasPermission(runtime, "scene.write")) throw new Error("Missing scene.write permission");
+        const updates = Array.isArray(data.data?.updates) ? data.data.updates : [];
+        let updatedCount = 0;
+        for (const entry of updates) {
+          const ok = await setOwnTransform(id, String(entry?.id || ""), entry?.transform || {});
+          if (ok) updatedCount++;
+        }
+        result = updatedCount;
+        break;
+      }
       default:
         throw new Error("Unknown KB Loader API action");
     }
@@ -1302,41 +1235,6 @@ export async function initKBLoader(options: LoaderOptions): Promise<void> {
 
   initialized = true;
   hostScene = options.scene;
-  hostCamera = options.camera || null;
-  hostRenderer = options.renderer || null;
-  hostKeyLight = options.keyLight || null;
-
-  if (hostCamera) {
-    let lastX = Number.NaN;
-    let lastZ = Number.NaN;
-    setInterval(() => {
-      if (!hostCamera) return;
-      const x = Number(hostCamera.position.x.toFixed(2));
-      const z = Number(hostCamera.position.z.toFixed(2));
-      if (Number.isNaN(lastX) || Math.hypot(x - lastX, z - lastZ) > 0.65) {
-        lastX = x;
-        lastZ = z;
-        const dir = new THREE.Vector3(0, 0, -1);
-        hostCamera.getWorldDirection(dir);
-        for (const rt of runtimes.values()) {
-          if (rt.ready && rt.iframe?.contentWindow) {
-            rt.iframe.contentWindow.postMessage({
-              __kbloader: 1,
-              token: rt.token,
-              type: "event",
-              payload: {
-                name: "camera.move",
-                data: {
-                  position: [x, Number(hostCamera.position.y.toFixed(2)), z],
-                  direction: [Number(dir.x.toFixed(3)), Number(dir.y.toFixed(3)), Number(dir.z.toFixed(3))]
-                }
-              }
-            }, "*");
-          }
-        }
-      }
-    }, 350);
-  }
   appVersion = options.appVersion || "2.0.0";
 
   if (!document.body) {
@@ -1376,4 +1274,5 @@ export async function initKBLoader(options: LoaderOptions): Promise<void> {
     exportMod(mod);
   }
 };
+
 

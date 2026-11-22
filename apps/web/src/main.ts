@@ -2828,7 +2828,7 @@ __kbAttachAudioSettings();
 
 
 // KBVERSE_MOD_LOADER_BOOT_V1
-void initKBLoader({ appVersion: '2.0.0', scene: scene, camera: camera, renderer: renderer, keyLight: light });
+void initKBLoader({ appVersion: '2.0.0', scene: scene });
 
 
 
