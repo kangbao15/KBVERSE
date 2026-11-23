@@ -81,10 +81,10 @@ export class KbResourceManager {
     const resource = this.resources.get(id);
     if (!resource) return false;
 
-    const operation = (async () => {
+    const operation = Promise.resolve().then(async () => {
       await resource.dispose?.();
       this.resources.delete(id);
-    })();
+    });
 
     this.releasing.set(id, operation);
 
