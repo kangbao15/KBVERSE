@@ -674,3 +674,34 @@ test("ResourceManager: releaseAll chờ disposer đang chạy hoàn tất", asyn
   assert.equal(releaseAllFinished, true);
   assert.equal(manager.size, 0);
 });
+
+test("ModuleRegistry: chỉ cho phép chuyển trạng thái hợp lệ", () => {
+  const registry = new KbModuleRegistry();
+  registry.register({ id: "guard", version: "1.0.0" });
+
+  assert.throws(
+    () => registry.setState("guard", "running"),
+    /Invalid module state transition/
+  );
+  assert.equal(registry.getState("guard"), "registered");
+
+  registry.setState("guard", "initializing");
+  registry.setState("guard", "initialized");
+  registry.setState("guard", "starting");
+  registry.setState("guard", "running");
+
+  assert.throws(
+    () => registry.setState("guard", "registered"),
+    /Invalid module state transition/
+  );
+
+  registry.setState("guard", "stopping");
+  registry.setState("guard", "stopped");
+  registry.setState("guard", "initializing");
+  registry.setState("guard", "initialized");
+  registry.setState("guard", "starting");
+  registry.setState("guard", "failed");
+  registry.setState("guard", "initialized");
+
+  assert.equal(registry.getState("guard"), "initialized");
+});
