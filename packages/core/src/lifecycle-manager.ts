@@ -177,7 +177,7 @@ export class KbLifecycleManager {
 
           try {
             await module.stop?.(cleanupContext);
-            this.registry.setState(id, "stopped");
+            this.registry.setState(id, "initialized");
           } catch (cleanupError) {
             failures.push(
               new Error(`Failed to clean up module "${id}".`, {
@@ -191,7 +191,7 @@ export class KbLifecycleManager {
 
             try {
               await rollbackModule.stop?.(cleanupContext);
-              this.registry.setState(rollbackId, "stopped");
+              this.registry.setState(rollbackId, "initialized");
             } catch (rollbackError) {
               this.registry.setState(rollbackId, "failed");
               failures.push(

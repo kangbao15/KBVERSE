@@ -534,6 +534,7 @@ test("ModuleRegistry: giữ module khi dispose lỗi và cho phép retry", async
 test("Lifecycle: rollback module đang chạy khi start thất bại", async () => {
   const core = new KBVerseCore();
   const order = [];
+  let shouldFail = true;
 
   core.register({
     id: "base",
@@ -547,7 +548,7 @@ test("Lifecycle: rollback module đang chạy khi start thất bại", async () 
     version: "1.0.0",
     dependencies: ["base"],
     start() {
-      throw new Error("Start failure");
+      if (shouldFail) throw new Error("Start failure");
     }
   });
 
@@ -560,6 +561,14 @@ test("Lifecycle: rollback module đang chạy khi start thất bại", async () 
 
   assert.deepEqual(order, ["start:base", "rollback:base"]);
   assert.equal(core.isRunning, false);
+  assert.equal(core.modules.getState("base"), "initialized");
+
+  shouldFail = false;
+  await core.start();
+
+  assert.equal(core.isRunning, true);
+  assert.deepEqual(order, ["start:base", "rollback:base", "start:base"]);
+  await core.stop();
 });
 
 test("Lifecycle: stop nhận signal chưa bị abort", async () => {
