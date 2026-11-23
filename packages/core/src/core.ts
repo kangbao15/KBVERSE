@@ -1,0 +1,100 @@
+import type { CoreContext, CoreModule } from "./contracts.js";
+import { KbEventBus } from "./event-bus.js";
+import { KbModuleRegistry } from "./module-registry.js";
+import { KbLifecycleManager } from "./lifecycle-manager.js";
+import { KbStateManager } from "./state-manager.js";
+import { KbErrorManager } from "./error-manager.js";
+import { KbDiagnostics } from "./diagnostics.js";
+
+export class KBVerseCore implements CoreContext {
+  readonly events = new KbEventBus();
+  readonly modules = new KbModuleRegistry();
+  readonly lifecycle: KbLifecycleManager;
+  readonly state = new KbStateManager();
+  readonly errors = new KbErrorManager();
+  readonly diagnostics = new KbDiagnostics();
+
+  private initialized = false;
+  private started = false;
+
+  constructor() {
+    this.lifecycle = new KbLifecycleManager(this.modules, this);
+
+    this.errors.subscribe((record) => {
+      this.events.emit("core:error", record);
+    });
+  }
+
+  register(module: CoreModule): void {
+    if (this.initialized) {
+      throw new Error("Cannot register modules after core initialization.");
+    }
+
+    this.modules.register(module);
+  }
+
+  async initialize(): Promise<void> {
+    if (this.initialized) {
+      throw new Error("Core is already initialized.");
+    }
+
+    try {
+      await this.lifecycle.initializeAll();
+      this.initialized = true;
+      this.events.emit("core:initialized");
+    } catch (error) {
+      this.errors.report(error, {
+        severity: "critical",
+        source: "core:lifecycle"
+      });
+      throw error;
+    }
+  }
+
+  async start(): Promise<void> {
+    if (!this.initialized) {
+      throw new Error("Core must be initialized before starting.");
+    }
+
+    if (this.started) {
+      throw new Error("Core is already running.");
+    }
+
+    try {
+      await this.lifecycle.startAll();
+      this.started = true;
+      this.events.emit("core:started");
+    } catch (error) {
+      this.errors.report(error, {
+        severity: "critical",
+        source: "core:lifecycle"
+      });
+      throw error;
+    }
+  }
+
+  async stop(): Promise<void> {
+    if (!this.initialized) return;
+
+    try {
+      await this.lifecycle.stopAll();
+      this.started = false;
+      this.initialized = false;
+      this.events.emit("core:stopped");
+    } catch (error) {
+      this.errors.report(error, {
+        severity: "error",
+        source: "core:lifecycle"
+      });
+      throw error;
+    }
+  }
+
+  get isInitialized(): boolean {
+    return this.initialized;
+  }
+
+  get isRunning(): boolean {
+    return this.started;
+  }
+}
