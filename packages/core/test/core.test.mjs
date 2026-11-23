@@ -632,25 +632,36 @@ test("ResourceManager: ngăn giải phóng cùng tài nguyên đồng thời", a
   assert.equal(manager.size, 0);
 });
 
-test("ResourceManager: releaseAll không đụng disposer đang chạy", async () => {
+test("ResourceManager: releaseAll chờ disposer đang chạy hoàn tất", async () => {
   const manager = new KbResourceManager();
-  let disposeCount = 0;
   let finishDispose;
+  let signalDisposeStarted;
+  let releaseAllFinished = false;
 
-  manager.register("shared", "test", {}, () => {
-    disposeCount++;
-    return new Promise((resolve) => {
-      finishDispose = resolve;
-    });
+  const disposeStarted = new Promise((resolve) => {
+    signalDisposeStarted = resolve;
   });
 
-  const first = manager.release("shared");
-  await new Promise((resolve) => setImmediate(resolve));
+  manager.register("shared", "test", {}, () =>
+    new Promise((resolve) => {
+      finishDispose = resolve;
+      signalDisposeStarted();
+    })
+  );
 
-  await manager.releaseAll();
-  assert.equal(disposeCount, 1);
+  const first = manager.release("shared");
+  await disposeStarted;
+
+  const cleanup = manager.releaseAll().then(() => {
+    releaseAllFinished = true;
+  });
+
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(releaseAllFinished, false);
 
   finishDispose();
-  assert.equal(await first, true);
+  await Promise.all([first, cleanup]);
+
+  assert.equal(releaseAllFinished, true);
   assert.equal(manager.size, 0);
 });
