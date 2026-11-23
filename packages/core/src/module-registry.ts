@@ -5,6 +5,17 @@ import type {
   ModuleState
 } from "./contracts.js";
 
+const ALLOWED_TRANSITIONS: Readonly<Record<ModuleState, readonly ModuleState[]>> = {
+  registered: ["initializing"],
+  initializing: ["initialized", "failed"],
+  initialized: ["starting", "stopping", "stopped"],
+  starting: ["running", "failed"],
+  running: ["stopping", "initialized", "failed"],
+  stopping: ["stopped", "failed"],
+  stopped: ["initializing", "stopping"],
+  failed: ["stopped", "initialized"]
+};
+
 export class KbModuleRegistry implements ModuleRegistry {
   private readonly modules = new Map<string, CoreModule>();
   private readonly states = new Map<string, ModuleState>();
@@ -104,6 +115,16 @@ export class KbModuleRegistry implements ModuleRegistry {
       throw new Error(`Unknown module "${id}".`);
     }
 
+    const currentState = this.states.get(id)!;
+
+    if (currentState === state) return;
+
+    if (!ALLOWED_TRANSITIONS[currentState].includes(state)) {
+      throw new Error(
+        `Invalid module state transition for "${id}": ${currentState} -> ${state}.`
+      );
+    }
+
     this.states.set(id, state);
   }
 
@@ -124,3 +145,4 @@ export class KbModuleRegistry implements ModuleRegistry {
     return this.modules.size;
   }
 }
+
