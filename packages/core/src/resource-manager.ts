@@ -13,6 +13,7 @@ interface ManagedResource<T> {
 
 export class KbResourceManager {
   private readonly resources = new Map<string, ManagedResource<unknown>>();
+  private readonly releasing = new Set<string>();
   private disposed = false;
 
   register<T>(
@@ -65,33 +66,43 @@ export class KbResourceManager {
   }
 
   list(type?: string): readonly ResourceDescriptor[] {
-    return [...this.resources.values()]
-      .filter((resource) => !type || resource.descriptor.type === type)
-      .map((resource) => resource.descriptor);
+    return Object.freeze(
+      [...this.resources.values()]
+        .filter((resource) => !type || resource.descriptor.type === type)
+        .map((resource) => resource.descriptor)
+    );
   }
 
   async release(id: string): Promise<boolean> {
     this.ensureActive();
 
+    if (this.releasing.has(id)) return false;
+
     const resource = this.resources.get(id);
     if (!resource) return false;
 
-    await resource.dispose?.();
-    this.resources.delete(id);
+    this.releasing.add(id);
 
-    return true;
+    try {
+      await resource.dispose?.();
+      this.resources.delete(id);
+      return true;
+    } finally {
+      this.releasing.delete(id);
+    }
   }
 
   async releaseAll(): Promise<void> {
     this.ensureActive();
 
-    const entries = [...this.resources.entries()];
+    const entries = [...this.resources.keys()].reverse();
     const failures: Error[] = [];
 
-    for (const [id, resource] of entries.reverse()) {
+    for (const id of entries) {
+      if (this.releasing.has(id)) continue;
+
       try {
-        await resource.dispose?.();
-        this.resources.delete(id);
+        await this.release(id);
       } catch (error) {
         failures.push(
           new Error(`Failed to release resource "${id}".`, {
@@ -123,4 +134,3 @@ export class KbResourceManager {
     return this.resources.size;
   }
 }
-
