@@ -2,6 +2,16 @@ import type { EventBus, EventListener } from "./contracts.js";
 
 export class KbEventBus implements EventBus {
   private readonly listeners = new Map<string, Set<EventListener>>();
+  private emitDepth = 0;
+  private readonly maxEmitDepth: number;
+
+  constructor(maxEmitDepth = 100) {
+    if (!Number.isSafeInteger(maxEmitDepth) || maxEmitDepth <= 0) {
+      throw new Error("Maximum emit depth must be a positive safe integer.");
+    }
+
+    this.maxEmitDepth = maxEmitDepth;
+  }
 
   on<T = unknown>(event: string, listener: EventListener<T>): () => void {
     if (!event.trim()) throw new Error("Event name cannot be empty.");
@@ -20,7 +30,9 @@ export class KbEventBus implements EventBus {
   }
 
   once<T = unknown>(event: string, listener: EventListener<T>): () => void {
-    const unsubscribe = this.on<T>(event, (data) => {
+    let unsubscribe = () => {};
+
+    unsubscribe = this.on<T>(event, (data) => {
       unsubscribe();
       listener(data);
     });
@@ -29,11 +41,34 @@ export class KbEventBus implements EventBus {
   }
 
   emit<T = unknown>(event: string, data?: T): void {
+    if (this.emitDepth >= this.maxEmitDepth) {
+      throw new Error("Maximum event emission depth exceeded.");
+    }
+
     const bucket = this.listeners.get(event);
     if (!bucket) return;
 
-    for (const listener of [...bucket]) {
-      listener(data);
+    const errors: Error[] = [];
+    this.emitDepth++;
+
+    try {
+      for (const listener of [...bucket]) {
+        try {
+          listener(data);
+        } catch (error) {
+          errors.push(
+            new Error(`Listener failed for event "${event}".`, {
+              cause: error
+            })
+          );
+        }
+      }
+    } finally {
+      this.emitDepth--;
+    }
+
+    if (errors.length > 0) {
+      throw new AggregateError(errors, `Event "${event}" listener failures.`);
     }
   }
 

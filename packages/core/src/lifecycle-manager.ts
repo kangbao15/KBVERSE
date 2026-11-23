@@ -3,11 +3,26 @@ import { KbModuleRegistry } from "./module-registry.js";
 
 export class KbLifecycleManager {
   private controller = new AbortController();
+  private operation: string | null = null;
 
   constructor(
     private readonly registry: KbModuleRegistry,
     private readonly core: CoreContext
   ) {}
+
+  private enter(operation: string): void {
+    if (this.operation !== null) {
+      throw new Error(
+        `Lifecycle operation "${this.operation}" is already in progress.`
+      );
+    }
+
+    this.operation = operation;
+  }
+
+  private leave(): void {
+    this.operation = null;
+  }
 
   private resolveOrder(): string[] {
     const modules = this.registry.list();
@@ -48,105 +63,200 @@ export class KbLifecycleManager {
     return order;
   }
 
-  private context(): ModuleContext {
+  private context(controller = this.controller): ModuleContext {
     return {
       core: this.core,
-      signal: this.controller.signal
+      signal: controller.signal
     };
   }
 
   async initializeAll(): Promise<void> {
-    const order = this.resolveOrder();
-    const initialized: string[] = [];
+    this.enter("initialize");
 
-    this.controller = new AbortController();
+    try {
+      const order = this.resolveOrder();
+      const initialized: string[] = [];
+      this.controller = new AbortController();
 
-    for (const id of order) {
-      const module = this.registry.get(id)!;
+      for (const id of order) {
+        const module = this.registry.get(id)!;
+        const state = this.registry.getState(id);
 
-      if (this.registry.getState(id) !== "registered" && this.registry.getState(id) !== "stopped") {
-        throw new Error(`Module "${id}" is not in the registered state.`);
-      }
-
-      this.registry.setState(id, "initializing");
-
-      try {
-        await module.initialize?.(this.context());
-        this.registry.setState(id, "initialized");
-        initialized.push(id);
-      } catch (error) {
-        this.registry.setState(id, "failed");
-
-        for (const rollbackId of initialized.reverse()) {
-          const rollbackModule = this.registry.get(rollbackId)!;
-
-          try {
-            await rollbackModule.stop?.(this.context());
-            this.registry.setState(rollbackId, "stopped");
-          } catch {
-            this.registry.setState(rollbackId, "failed");
-          }
+        if (state !== "registered" && state !== "stopped") {
+          throw new Error(`Module "${id}" is not in the registered state.`);
         }
 
-        throw new Error(`Failed to initialize module "${id}".`, {
-          cause: error
-        });
+        this.registry.setState(id, "initializing");
+
+        try {
+          await module.initialize?.(this.context());
+          this.registry.setState(id, "initialized");
+          initialized.push(id);
+        } catch (error) {
+          const failures: Error[] = [
+            new Error(`Failed to initialize module "${id}".`, {
+              cause: error
+            })
+          ];
+
+          this.registry.setState(id, "failed");
+
+          const cleanupContext = this.context(new AbortController());
+
+          try {
+            await module.stop?.(cleanupContext);
+            this.registry.setState(id, "stopped");
+          } catch (cleanupError) {
+            failures.push(
+              new Error(`Failed to clean up module "${id}".`, {
+                cause: cleanupError
+              })
+            );
+          }
+
+          for (const rollbackId of initialized.reverse()) {
+            const rollbackModule = this.registry.get(rollbackId)!;
+
+            try {
+              await rollbackModule.stop?.(cleanupContext);
+              this.registry.setState(rollbackId, "stopped");
+            } catch (rollbackError) {
+              this.registry.setState(rollbackId, "failed");
+              failures.push(
+                new Error(`Failed to roll back module "${rollbackId}".`, {
+                  cause: rollbackError
+                })
+              );
+            }
+          }
+
+          if (failures.length > 1) {
+            throw new AggregateError(
+              failures,
+              `Initialization and rollback failed for module "${id}".`
+            );
+          }
+
+          throw failures[0];
+        }
       }
+    } finally {
+      this.leave();
     }
   }
 
   async startAll(): Promise<void> {
-    const order = this.resolveOrder();
+    this.enter("start");
 
-    for (const id of order) {
-      const module = this.registry.get(id)!;
+    try {
+      const order = this.resolveOrder();
+      const started: string[] = [];
+      const cleanupContext = this.context(new AbortController());
 
-      if (this.registry.getState(id) !== "initialized") {
-        throw new Error(`Module "${id}" is not initialized.`);
+      for (const id of order) {
+        const module = this.registry.get(id)!;
+
+        if (this.registry.getState(id) !== "initialized") {
+          throw new Error(`Module "${id}" is not initialized.`);
+        }
+
+        this.registry.setState(id, "starting");
+
+        try {
+          await module.start?.(this.context());
+          this.registry.setState(id, "running");
+          started.push(id);
+        } catch (error) {
+          const failures: Error[] = [
+            new Error(`Failed to start module "${id}".`, {
+              cause: error
+            })
+          ];
+
+          this.registry.setState(id, "failed");
+
+          try {
+            await module.stop?.(cleanupContext);
+            this.registry.setState(id, "stopped");
+          } catch (cleanupError) {
+            failures.push(
+              new Error(`Failed to clean up module "${id}".`, {
+                cause: cleanupError
+              })
+            );
+          }
+
+          for (const rollbackId of started.reverse()) {
+            const rollbackModule = this.registry.get(rollbackId)!;
+
+            try {
+              await rollbackModule.stop?.(cleanupContext);
+              this.registry.setState(rollbackId, "stopped");
+            } catch (rollbackError) {
+              this.registry.setState(rollbackId, "failed");
+              failures.push(
+                new Error(`Failed to roll back module "${rollbackId}".`, {
+                  cause: rollbackError
+                })
+              );
+            }
+          }
+
+          if (failures.length > 1) {
+            throw new AggregateError(
+              failures,
+              `Start and rollback failed for module "${id}".`
+            );
+          }
+
+          throw failures[0];
+        }
       }
-
-      this.registry.setState(id, "starting");
-
-      try {
-        await module.start?.(this.context());
-        this.registry.setState(id, "running");
-      } catch (error) {
-        this.registry.setState(id, "failed");
-        throw new Error(`Failed to start module "${id}".`, {
-          cause: error
-        });
-      }
+    } finally {
+      this.leave();
     }
   }
 
   async stopAll(): Promise<void> {
-    const order = this.resolveOrder().reverse();
-    const failures: Error[] = [];
+    this.enter("stop");
 
-    this.controller.abort();
+    try {
+      const order = this.resolveOrder().reverse();
+      const failures: Error[] = [];
 
-    for (const id of order) {
-      const state = this.registry.getState(id);
+      this.controller.abort();
 
-      if (state !== "running" && state !== "initialized") continue;
+      const cleanupContext = this.context(new AbortController());
 
-      const module = this.registry.get(id)!;
-      this.registry.setState(id, "stopping");
+      for (const id of order) {
+        const state = this.registry.getState(id);
 
-      try {
-        await module.stop?.(this.context());
-        this.registry.setState(id, "stopped");
-      } catch (error) {
-        this.registry.setState(id, "failed");
-        failures.push(
-          new Error(`Failed to stop module "${id}".`, { cause: error })
+        if (state !== "running" && state !== "initialized") continue;
+
+        const module = this.registry.get(id)!;
+        this.registry.setState(id, "stopping");
+
+        try {
+          await module.stop?.(cleanupContext);
+          this.registry.setState(id, "stopped");
+        } catch (error) {
+          this.registry.setState(id, "failed");
+          failures.push(
+            new Error(`Failed to stop module "${id}".`, {
+              cause: error
+            })
+          );
+        }
+      }
+
+      if (failures.length > 0) {
+        throw new AggregateError(
+          failures,
+          "One or more modules failed to stop."
         );
       }
-    }
-
-    if (failures.length > 0) {
-      throw new AggregateError(failures, "One or more modules failed to stop.");
+    } finally {
+      this.leave();
     }
   }
 }
-

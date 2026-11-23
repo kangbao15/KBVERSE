@@ -216,7 +216,11 @@ export class KbTaskScheduler {
 
     this.closed = false;
   }
-  async shutdown(): Promise<void> {
+  async shutdown(gracePeriodMs = 1000): Promise<void> {
+    if (!Number.isFinite(gracePeriodMs) || gracePeriodMs < 0) {
+      throw new Error("Shutdown grace period must be a non-negative number.");
+    }
+
     this.closed = true;
 
     for (const task of this.queue.splice(0)) {
@@ -231,8 +235,22 @@ export class KbTaskScheduler {
       }
     }
 
-    while (this.active > 0) {
-      await new Promise((resolve) => setTimeout(resolve, 10));
+    const deadline = Date.now() + gracePeriodMs;
+
+    while (this.active > 0 && Date.now() < deadline) {
+      await new Promise((resolve) =>
+        setTimeout(resolve, Math.min(10, Math.max(1, deadline - Date.now())))
+      );
+    }
+
+    if (this.active > 0) {
+      const running = [...this.tasks.values()]
+        .filter((task) => task.descriptor.status === "running")
+        .map((task) => task.descriptor.name);
+
+      throw new Error(
+        `Task scheduler shutdown timed out. Still running: ${running.join(", ")}`
+      );
     }
   }
 }

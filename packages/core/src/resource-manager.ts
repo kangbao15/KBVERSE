@@ -71,6 +71,8 @@ export class KbResourceManager {
   }
 
   async release(id: string): Promise<boolean> {
+    this.ensureActive();
+
     const resource = this.resources.get(id);
     if (!resource) return false;
 
@@ -81,6 +83,8 @@ export class KbResourceManager {
   }
 
   async releaseAll(): Promise<void> {
+    this.ensureActive();
+
     const entries = [...this.resources.entries()];
     const failures: Error[] = [];
 

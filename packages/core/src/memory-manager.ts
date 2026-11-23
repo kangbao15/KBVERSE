@@ -17,6 +17,9 @@ export interface MemoryUsage {
 export class KbMemoryManager {
   private readonly allocations = new Map<string, MemoryAllocation>();
   private readonly limits = new Map<string, number>();
+  private readonly categoryUsage = new Map<string, number>();
+  private readonly ownerUsage = new Map<string, number>();
+  private allocatedBytes = 0;
 
   constructor(private globalLimitBytes = 512 * 1024 * 1024) {
     this.validateLimit(globalLimitBytes);
@@ -40,23 +43,21 @@ export class KbMemoryManager {
       throw new Error("Allocation size must be a positive safe integer.");
     }
 
-    const current = this.getUsage().allocatedBytes;
-
-    if (bytes > this.globalLimitBytes - current) {
+    if (bytes > this.globalLimitBytes - this.allocatedBytes) {
       throw new Error("Global memory budget exceeded.");
     }
 
+    const currentCategoryUsage = this.categoryUsage.get(category) ?? 0;
     const categoryLimit = this.limits.get(category);
 
-    if (categoryLimit !== undefined) {
-      const categoryUsage = this.getCategoryUsage(category);
-
-      if (bytes > categoryLimit - categoryUsage) {
-        throw new Error(`Memory budget exceeded for category "${category}".`);
-      }
+    if (
+      categoryLimit !== undefined &&
+      bytes > categoryLimit - currentCategoryUsage
+    ) {
+      throw new Error(`Memory budget exceeded for category "${category}".`);
     }
 
-    const allocation = Object.freeze({
+    const allocation: MemoryAllocation = Object.freeze({
       id,
       owner,
       category,
@@ -65,19 +66,27 @@ export class KbMemoryManager {
     });
 
     this.allocations.set(id, allocation);
+    this.allocatedBytes += bytes;
+    this.categoryUsage.set(category, currentCategoryUsage + bytes);
+    this.ownerUsage.set(owner, (this.ownerUsage.get(owner) ?? 0) + bytes);
+
     return allocation;
   }
 
   release(id: string): boolean {
-    return this.allocations.delete(id);
+    const allocation = this.allocations.get(id);
+    if (!allocation) return false;
+
+    this.removeAllocation(allocation);
+    return true;
   }
 
   releaseOwner(owner: string): number {
     let released = 0;
 
-    for (const allocation of this.allocations.values()) {
+    for (const allocation of [...this.allocations.values()]) {
       if (allocation.owner === owner) {
-        this.allocations.delete(allocation.id);
+        this.removeAllocation(allocation);
         released++;
       }
     }
@@ -88,7 +97,7 @@ export class KbMemoryManager {
   setGlobalLimit(bytes: number): void {
     this.validateLimit(bytes);
 
-    if (bytes < this.getUsage().allocatedBytes) {
+    if (bytes < this.allocatedBytes) {
       throw new Error("New global limit is below current memory usage.");
     }
 
@@ -102,7 +111,7 @@ export class KbMemoryManager {
 
     this.validateLimit(bytes);
 
-    if (bytes < this.getCategoryUsage(category)) {
+    if (bytes < (this.categoryUsage.get(category) ?? 0)) {
       throw new Error(`New limit is below current usage for "${category}".`);
     }
 
@@ -110,50 +119,54 @@ export class KbMemoryManager {
   }
 
   getUsage(): MemoryUsage {
-    const allocatedBytes = [...this.allocations.values()].reduce(
-      (total, allocation) => total + allocation.bytes,
-      0
-    );
-
     return Object.freeze({
-      allocatedBytes,
+      allocatedBytes: this.allocatedBytes,
       allocationCount: this.allocations.size,
       limitBytes: this.globalLimitBytes,
-      availableBytes: Math.max(0, this.globalLimitBytes - allocatedBytes),
-      overLimit: allocatedBytes > this.globalLimitBytes
+      availableBytes: Math.max(0, this.globalLimitBytes - this.allocatedBytes),
+      overLimit: this.allocatedBytes > this.globalLimitBytes
     });
   }
 
   getCategoryUsage(category: string): number {
-    let total = 0;
-
-    for (const allocation of this.allocations.values()) {
-      if (allocation.category === category) {
-        total += allocation.bytes;
-      }
-    }
-
-    return total;
+    return this.categoryUsage.get(category) ?? 0;
   }
 
   getOwnerUsage(owner: string): number {
-    let total = 0;
-
-    for (const allocation of this.allocations.values()) {
-      if (allocation.owner === owner) {
-        total += allocation.bytes;
-      }
-    }
-
-    return total;
+    return this.ownerUsage.get(owner) ?? 0;
   }
 
   list(): readonly MemoryAllocation[] {
-    return [...this.allocations.values()];
+    return Object.freeze([...this.allocations.values()]);
   }
 
   clear(): void {
     this.allocations.clear();
+    this.categoryUsage.clear();
+    this.ownerUsage.clear();
+    this.allocatedBytes = 0;
+  }
+
+  private removeAllocation(allocation: MemoryAllocation): void {
+    this.allocations.delete(allocation.id);
+    this.allocatedBytes -= allocation.bytes;
+
+    this.decreaseUsage(this.categoryUsage, allocation.category, allocation.bytes);
+    this.decreaseUsage(this.ownerUsage, allocation.owner, allocation.bytes);
+  }
+
+  private decreaseUsage(
+    usage: Map<string, number>,
+    key: string,
+    bytes: number
+  ): void {
+    const remaining = (usage.get(key) ?? 0) - bytes;
+
+    if (remaining <= 0) {
+      usage.delete(key);
+    } else {
+      usage.set(key, remaining);
+    }
   }
 
   private validateLimit(bytes: number): void {

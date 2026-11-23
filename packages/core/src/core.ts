@@ -47,6 +47,7 @@ export class KBVerseCore implements CoreContext {
     }
 
     try {
+      this.tasks.reopen();
       await this.lifecycle.initializeAll();
       this.initialized = true;
       this.events.emit("core:initialized");
@@ -130,6 +131,7 @@ export class KBVerseCore implements CoreContext {
     return this.started;
   }
 }
+
 
 
 

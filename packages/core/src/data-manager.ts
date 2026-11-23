@@ -9,6 +9,14 @@ export interface DataRecord<T = unknown> {
 export class KbDataManager {
   private readonly records = new Map<string, DataRecord>();
 
+  private cloneValue<T>(value: T): T {
+    try {
+      return structuredClone(value);
+    } catch (error) {
+      throw new Error("Data value cannot be cloned.", { cause: error });
+    }
+  }
+
   private makeId(namespace: string, key: string): string {
     if (!namespace.trim() || !key.trim()) {
       throw new Error("Namespace and key cannot be empty.");
@@ -56,7 +64,14 @@ export class KbDataManager {
   }
 
   snapshot(): readonly DataRecord[] {
-    return Object.freeze([...this.records.values()]);
+    return Object.freeze(
+      [...this.records.values()].map((record) =>
+        Object.freeze({
+          ...record,
+          value: this.cloneValue(record.value)
+        })
+      )
+    );
   }
 
   restore(snapshot: readonly DataRecord[]): void {
@@ -69,7 +84,10 @@ export class KbDataManager {
         throw new Error(`Duplicate data record "${id}" in snapshot.`);
       }
 
-      restored.set(id, Object.freeze({ ...record }));
+      restored.set(id, Object.freeze({
+        ...record,
+        value: this.cloneValue(record.value)
+      }));
     }
 
     this.records.clear();

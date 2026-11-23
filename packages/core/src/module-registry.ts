@@ -8,6 +8,7 @@ import type {
 export class KbModuleRegistry implements ModuleRegistry {
   private readonly modules = new Map<string, CoreModule>();
   private readonly states = new Map<string, ModuleState>();
+  private readonly dependencies = new Map<string, readonly string[]>();
 
   register(module: CoreModule): void {
     const id = module.id?.trim();
@@ -19,7 +20,14 @@ export class KbModuleRegistry implements ModuleRegistry {
       throw new Error(`Module "${id}" is already registered.`);
     }
 
-    const dependencies = module.dependencies ?? [];
+    const dependencies = (module.dependencies ?? []).map((dependency) => {
+      const normalized = dependency.trim();
+      if (!normalized) {
+        throw new Error(`Module "${id}" contains an empty dependency.`);
+      }
+      return normalized;
+    });
+
     const uniqueDependencies = new Set(dependencies);
 
     if (uniqueDependencies.size !== dependencies.length) {
@@ -30,7 +38,25 @@ export class KbModuleRegistry implements ModuleRegistry {
       throw new Error(`Module "${id}" cannot depend on itself.`);
     }
 
-    this.modules.set(id, module);
+    for (const dependency of dependencies) {
+      if (!this.modules.has(dependency)) {
+        throw new Error(
+          `Module "${id}" requires unknown dependency "${dependency}".`
+        );
+      }
+    }
+
+    const frozenDependencies = Object.freeze([...dependencies]);
+
+    const registeredModule: CoreModule = Object.freeze({
+      ...module,
+      id,
+      version,
+      dependencies: frozenDependencies
+    });
+
+    this.modules.set(id, registeredModule);
+    this.dependencies.set(id, frozenDependencies);
     this.states.set(id, "registered");
   }
 
@@ -46,9 +72,11 @@ export class KbModuleRegistry implements ModuleRegistry {
       );
     }
 
-    const dependents = [...this.modules.values()]
-      .filter((candidate) => candidate.dependencies?.includes(id))
-      .map((candidate) => candidate.id);
+    const dependents = [...this.dependencies.entries()]
+      .filter(([candidateId, required]) =>
+        candidateId !== id && required.includes(id)
+      )
+      .map(([candidateId]) => candidateId);
 
     if (dependents.length > 0) {
       throw new Error(
@@ -59,6 +87,7 @@ export class KbModuleRegistry implements ModuleRegistry {
     await module.dispose?.();
 
     this.modules.delete(id);
+    this.dependencies.delete(id);
     this.states.delete(id);
   }
 
@@ -79,13 +108,15 @@ export class KbModuleRegistry implements ModuleRegistry {
   }
 
   list(): readonly ModuleDescriptor[] {
-    return [...this.modules.values()].map((module) =>
-      Object.freeze({
-        id: module.id,
-        version: module.version,
-        dependencies: Object.freeze([...(module.dependencies ?? [])]),
-        state: this.states.get(module.id) ?? "registered"
-      })
+    return Object.freeze(
+      [...this.modules.values()].map((module) =>
+        Object.freeze({
+          id: module.id,
+          version: module.version,
+          dependencies: this.dependencies.get(module.id) ?? Object.freeze([]),
+          state: this.states.get(module.id) ?? "registered"
+        })
+      )
     );
   }
 
