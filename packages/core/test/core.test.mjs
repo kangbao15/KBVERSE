@@ -705,3 +705,42 @@ test("ModuleRegistry: chỉ cho phép chuyển trạng thái hợp lệ", () => 
 
   assert.equal(registry.getState("guard"), "initialized");
 });
+
+test("Core: khóa khởi động khi shutdown lỗi và cho phép retry", async () => {
+  const core = new KBVerseCore();
+  let disposeAttempts = 0;
+  let moduleStops = 0;
+
+  core.register({
+    id: "shutdown-test",
+    version: "1.0.0",
+    stop() {
+      moduleStops++;
+    }
+  });
+
+  core.resources.register("unstable", "test", {}, () => {
+    disposeAttempts++;
+    if (disposeAttempts === 1) {
+      throw new Error("Temporary dispose failure");
+    }
+  });
+
+  await core.initialize();
+  await core.start();
+
+  await assert.rejects(core.stop(), /Core shutdown failed/);
+  assert.equal(core.isInitialized, true);
+  assert.equal(core.isRunning, false);
+
+  await assert.rejects(core.start(), /shutdown/i);
+
+  await core.stop();
+
+  assert.equal(core.isInitialized, false);
+  assert.equal(core.isRunning, false);
+  assert.equal(disposeAttempts, 2);
+  assert.equal(moduleStops, 1);
+});
+
+

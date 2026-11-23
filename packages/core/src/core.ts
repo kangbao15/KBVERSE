@@ -24,6 +24,7 @@ export class KBVerseCore implements CoreContext {
 
   private initialized = false;
   private started = false;
+  private stopping = false;
 
   constructor() {
     this.lifecycle = new KbLifecycleManager(this.modules, this);
@@ -34,6 +35,10 @@ export class KBVerseCore implements CoreContext {
   }
 
   register(module: CoreModule): void {
+    if (this.stopping) {
+      throw new Error("Cannot register modules while core shutdown is incomplete.");
+    }
+
     if (this.initialized) {
       throw new Error("Cannot register modules after core initialization.");
     }
@@ -42,6 +47,10 @@ export class KBVerseCore implements CoreContext {
   }
 
   async initialize(): Promise<void> {
+    if (this.stopping) {
+      throw new Error("Cannot initialize core while shutdown is incomplete.");
+    }
+
     if (this.initialized) {
       throw new Error("Core is already initialized.");
     }
@@ -61,6 +70,10 @@ export class KBVerseCore implements CoreContext {
   }
 
   async start(): Promise<void> {
+    if (this.stopping) {
+      throw new Error("Cannot start core while shutdown is incomplete.");
+    }
+
     if (!this.initialized) {
       throw new Error("Core must be initialized before starting.");
     }
@@ -84,6 +97,8 @@ export class KBVerseCore implements CoreContext {
 
   async stop(): Promise<void> {
     if (!this.initialized) return;
+
+    this.stopping = true;
 
     const failures: unknown[] = [];
     let lifecycleStopped = false;
@@ -120,6 +135,7 @@ export class KBVerseCore implements CoreContext {
 
     this.started = false;
     this.initialized = false;
+    this.stopping = false;
     this.events.emit("core:stopped");
   }
 
@@ -130,8 +146,8 @@ export class KBVerseCore implements CoreContext {
   get isRunning(): boolean {
     return this.started;
   }
+
+  get isStopping(): boolean {
+    return this.stopping;
+  }
 }
-
-
-
-
