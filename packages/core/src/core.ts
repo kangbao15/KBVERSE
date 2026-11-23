@@ -5,6 +5,10 @@ import { KbLifecycleManager } from "./lifecycle-manager.js";
 import { KbStateManager } from "./state-manager.js";
 import { KbErrorManager } from "./error-manager.js";
 import { KbDiagnostics } from "./diagnostics.js";
+import { KbTaskScheduler } from "./task-scheduler.js";
+import { KbResourceManager } from "./resource-manager.js";
+import { KbDataManager } from "./data-manager.js";
+import { KbMemoryManager } from "./memory-manager.js";
 
 export class KBVerseCore implements CoreContext {
   readonly events = new KbEventBus();
@@ -13,6 +17,10 @@ export class KBVerseCore implements CoreContext {
   readonly state = new KbStateManager();
   readonly errors = new KbErrorManager();
   readonly diagnostics = new KbDiagnostics();
+  readonly tasks = new KbTaskScheduler();
+  readonly resources = new KbResourceManager();
+  readonly data = new KbDataManager();
+  readonly memory = new KbMemoryManager();
 
   private initialized = false;
   private started = false;
@@ -76,18 +84,42 @@ export class KBVerseCore implements CoreContext {
   async stop(): Promise<void> {
     if (!this.initialized) return;
 
-    try {
-      await this.lifecycle.stopAll();
+    const failures: unknown[] = [];
+    let lifecycleStopped = false;
+
+    const cleanupSteps = [
+      () => this.tasks.shutdown(),
+      () => this.resources.releaseAll(),
+      async () => {
+        await this.lifecycle.stopAll();
+        lifecycleStopped = true;
+      }
+    ];
+
+    for (const cleanup of cleanupSteps) {
+      try {
+        await cleanup();
+      } catch (error) {
+        failures.push(error);
+      }
+    }
+
+    if (lifecycleStopped) {
       this.started = false;
-      this.initialized = false;
-      this.events.emit("core:stopped");
-    } catch (error) {
+    }
+
+    if (failures.length > 0) {
+      const error = new AggregateError(failures, "Core shutdown failed.");
       this.errors.report(error, {
         severity: "error",
-        source: "core:lifecycle"
+        source: "core:shutdown"
       });
       throw error;
     }
+
+    this.started = false;
+    this.initialized = false;
+    this.events.emit("core:stopped");
   }
 
   get isInitialized(): boolean {
@@ -98,3 +130,6 @@ export class KBVerseCore implements CoreContext {
     return this.started;
   }
 }
+
+
+
