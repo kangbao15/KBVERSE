@@ -11,6 +11,13 @@ export interface CoreErrorRecord {
 
 export type CoreErrorHandler = (record: CoreErrorRecord) => void;
 
+const VALID_SEVERITIES = new Set<ErrorSeverity>([
+  "info",
+  "warning",
+  "error",
+  "critical"
+]);
+
 export class KbErrorManager {
   private readonly records: CoreErrorRecord[] = [];
   private readonly handlers = new Set<CoreErrorHandler>();
@@ -29,16 +36,28 @@ export class KbErrorManager {
       source?: string;
     } = {}
   ): CoreErrorRecord {
-    const message =
-      error instanceof Error
-        ? error.message
-        : String(error);
+    const severity = options.severity ?? "error";
+    const source = options.source ?? "unknown";
+
+    if (!VALID_SEVERITIES.has(severity)) {
+      throw new Error(`Invalid error severity: ${String(severity)}.`);
+    }
+
+    if (typeof source !== "string" || !source.trim()) {
+      throw new Error("Error source must be a non-empty string.");
+    }
+
+    if (!Number.isSafeInteger(this.nextId)) {
+      throw new Error("Error record ID limit has been reached.");
+    }
+
+    const message = this.getErrorMessage(error);
 
     const record: CoreErrorRecord = Object.freeze({
       id: this.nextId++,
       message,
-      severity: options.severity ?? "error",
-      source: options.source ?? "unknown",
+      severity,
+      source,
       timestamp: Date.now(),
       cause: error instanceof Error ? error.cause : undefined
     });
@@ -61,6 +80,10 @@ export class KbErrorManager {
   }
 
   subscribe(handler: CoreErrorHandler): () => void {
+    if (typeof handler !== "function") {
+      throw new TypeError("Error handler must be a function.");
+    }
+
     this.handlers.add(handler);
     return () => this.handlers.delete(handler);
   }
@@ -70,6 +93,10 @@ export class KbErrorManager {
   }
 
   getBySeverity(severity: ErrorSeverity): readonly CoreErrorRecord[] {
+    if (!VALID_SEVERITIES.has(severity)) {
+      throw new Error(`Invalid error severity: ${String(severity)}.`);
+    }
+
     return this.records.filter(
       (record) => record.severity === severity
     );
@@ -81,5 +108,17 @@ export class KbErrorManager {
 
   get size(): number {
     return this.records.length;
+  }
+
+  private getErrorMessage(error: unknown): string {
+    if (error instanceof Error) {
+      return error.message;
+    }
+
+    try {
+      return String(error);
+    } catch {
+      return "An unknown error occurred.";
+    }
   }
 }

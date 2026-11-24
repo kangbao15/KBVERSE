@@ -14,32 +14,36 @@ export class KbDiagnostics {
   private readonly metrics = new Map<string, DiagnosticMetric>();
 
   set(name: string, value: number, unit = ""): void {
-    if (!name.trim()) {
-      throw new Error("Metric name cannot be empty.");
-    }
+    this.validateName(name);
 
     if (!Number.isFinite(value)) {
       throw new Error(`Metric "${name}" must have a finite value.`);
     }
 
-    this.metrics.set(
+    if (typeof unit !== "string") {
+      throw new TypeError("Metric unit must be a string.");
+    }
+
+    this.metrics.set(name, Object.freeze({
       name,
-      Object.freeze({
-        name,
-        value,
-        unit,
-        updatedAt: Date.now()
-      })
-    );
+      value,
+      unit,
+      updatedAt: Date.now()
+    }));
   }
 
   increment(name: string, amount = 1, unit = ""): number {
+    this.validateName(name);
+
     if (!Number.isFinite(amount)) {
       throw new Error("Increment amount must be finite.");
     }
 
-    const current = this.metrics.get(name)?.value ?? 0;
-    const next = current + amount;
+    const next = (this.metrics.get(name)?.value ?? 0) + amount;
+
+    if (!Number.isFinite(next)) {
+      throw new Error(`Metric "${name}" exceeded the finite number range.`);
+    }
 
     this.set(name, next, unit);
     return next;
@@ -56,7 +60,11 @@ export class KbDiagnostics {
   snapshot(): DiagnosticSnapshot {
     return Object.freeze({
       capturedAt: Date.now(),
-      metrics: Object.freeze([...this.metrics.values()])
+      metrics: Object.freeze(
+        [...this.metrics.values()].map((metric) =>
+          Object.freeze({ ...metric })
+        )
+      )
     });
   }
 
@@ -66,5 +74,11 @@ export class KbDiagnostics {
 
   get size(): number {
     return this.metrics.size;
+  }
+
+  private validateName(name: string): void {
+    if (typeof name !== "string" || !name.trim()) {
+      throw new Error("Metric name cannot be empty.");
+    }
   }
 }

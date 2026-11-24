@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { KbEventBus, KbMemoryManager, KBVerseCore, KbModuleRegistry, KbTaskScheduler, KbResourceManager, KbDataManager } from "../dist/index.js";
+import { KbEventBus, KbMemoryManager, KBVerseCore, KbModuleRegistry, KbTaskScheduler, KbResourceManager, KbDataManager, KbDiagnostics, KbErrorManager } from "../dist/index.js";
 
 test("EventBus: đăng ký, phát và tự hủy listener once", () => {
   const bus = new KbEventBus();
@@ -803,3 +803,169 @@ test("Core: từ chối hai lệnh shutdown chạy đồng thời", async () => 
   assert.equal(core.isInitialized, false);
   assert.equal(core.isStopping, false);
 });
+
+
+test("Diagnostics: quản lý metric và increment", () => {
+  const diagnostics = new KbDiagnostics();
+
+  assert.equal(diagnostics.set("fps", 60, "fps"), undefined);
+  assert.equal(diagnostics.increment("fps", 5, "fps"), 65);
+  assert.equal(diagnostics.get("fps").value, 65);
+  assert.equal(diagnostics.get("fps").unit, "fps");
+  assert.equal(diagnostics.size, 1);
+
+  assert.equal(diagnostics.remove("fps"), true);
+  assert.equal(diagnostics.remove("fps"), false);
+  assert.equal(diagnostics.size, 0);
+});
+
+test("Diagnostics: từ chối metric không hợp lệ", () => {
+  const diagnostics = new KbDiagnostics();
+
+  assert.throws(() => diagnostics.set("", 1), /name/i);
+  assert.throws(() => diagnostics.set("fps", Infinity), /finite/i);
+  assert.throws(() => diagnostics.increment("fps", NaN), /finite/i);
+  assert.throws(() => diagnostics.increment("", 1), /name/i);
+});
+
+test("Diagnostics: snapshot bất biến và reset", () => {
+  const diagnostics = new KbDiagnostics();
+  diagnostics.set("fps", 60);
+
+  const snapshot = diagnostics.snapshot();
+
+  assert.equal(Object.isFrozen(snapshot), true);
+  assert.equal(Object.isFrozen(snapshot.metrics), true);
+  assert.equal(Object.isFrozen(snapshot.metrics[0]), true);
+  assert.equal(snapshot.metrics[0].value, 60);
+
+  diagnostics.set("fps", 30);
+  assert.equal(snapshot.metrics[0].value, 60);
+
+  diagnostics.reset();
+  assert.equal(diagnostics.size, 0);
+});
+
+test("ErrorManager: lưu lịch sử có giới hạn và lọc severity", () => {
+  const errors = new KbErrorManager(2);
+
+  errors.report(new Error("First"), { severity: "info" });
+  errors.report(new Error("Second"), { severity: "warning" });
+  errors.report(new Error("Third"), { severity: "critical" });
+
+  assert.equal(errors.size, 2);
+  assert.deepEqual(
+    errors.getHistory().map((record) => record.message),
+    ["Second", "Third"]
+  );
+  assert.equal(errors.getBySeverity("warning").length, 1);
+  assert.equal(errors.getBySeverity("info").length, 0);
+});
+
+test("ErrorManager: subscribe, unsubscribe và cô lập handler lỗi", () => {
+  const errors = new KbErrorManager();
+  const received = [];
+
+  errors.subscribe(() => {
+    throw new Error("Handler failure");
+  });
+
+  const unsubscribe = errors.subscribe((record) => {
+    received.push(record.id);
+  });
+
+  const first = errors.report("First error");
+  unsubscribe();
+  errors.report("Second error");
+
+  assert.deepEqual(received, [first.id]);
+  assert.equal(errors.size, 2);
+});
+
+test("ErrorManager: bảo vệ lịch sử và giữ cause", () => {
+  const errors = new KbErrorManager();
+  const cause = new Error("Root cause");
+  const original = new Error("Outer error", { cause });
+
+  const record = errors.report(original, {
+    severity: "critical",
+    source: "test"
+  });
+
+  const history = errors.getHistory();
+  history.pop();
+
+  assert.equal(errors.size, 1);
+  assert.equal(Object.isFrozen(record), true);
+  assert.equal(record.cause, cause);
+  assert.equal(record.severity, "critical");
+  assert.equal(record.source, "test");
+
+  errors.clearHistory();
+  assert.equal(errors.size, 0);
+});
+
+test("ErrorManager: từ chối history limit không hợp lệ", () => {
+  assert.throws(() => new KbErrorManager(0), /positive integer/i);
+  assert.throws(() => new KbErrorManager(1.5), /positive integer/i);
+});
+
+test("Diagnostics: validates units and prevents numeric overflow", () => {
+  const diagnostics = new KbDiagnostics();
+
+  assert.throws(
+    () => diagnostics.set("memory", 10, 123),
+    TypeError
+  );
+
+  assert.equal(diagnostics.increment("counter", 5), 5);
+  diagnostics.increment("overflow", Number.MAX_VALUE);
+  assert.throws(
+    () => diagnostics.increment("overflow", Number.MAX_VALUE),
+    /finite number range/
+  );
+
+  assert.equal(diagnostics.get("counter")?.value, 5);
+});
+
+test("ErrorManager: validates severity, source and handlers", () => {
+  const manager = new KbErrorManager();
+
+  assert.throws(
+    () => manager.report("failure", { severity: "invalid" }),
+    /Invalid error severity/
+  );
+
+  assert.throws(
+    () => manager.report("failure", { source: "" }),
+    /non-empty string/
+  );
+
+  assert.throws(
+    () => manager.subscribe(null),
+    TypeError
+  );
+
+  assert.throws(
+    () => manager.getBySeverity("invalid"),
+    /Invalid error severity/
+  );
+
+  assert.equal(manager.size, 0);
+});
+
+test("ErrorManager: survives errors during string conversion", () => {
+  const manager = new KbErrorManager();
+  const hostileValue = {
+    toString() {
+      throw new Error("Conversion failed");
+    }
+  };
+
+  const record = manager.report(hostileValue);
+
+  assert.equal(record.message, "An unknown error occurred.");
+  assert.equal(manager.size, 1);
+});
+
+
