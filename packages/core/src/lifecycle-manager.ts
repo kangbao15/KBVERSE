@@ -4,6 +4,7 @@ import { KbModuleRegistry } from "./module-registry.js";
 export class KbLifecycleManager {
   private controller = new AbortController();
   private operation: string | null = null;
+  private readonly cleanupTargets = new Map<string, "initialized" | "stopped">();
 
   constructor(
     private readonly registry: KbModuleRegistry,
@@ -75,17 +76,20 @@ export class KbLifecycleManager {
 
     try {
       const order = this.resolveOrder();
-      const initialized: string[] = [];
-      this.controller = new AbortController();
 
       for (const id of order) {
-        const module = this.registry.get(id)!;
         const state = this.registry.getState(id);
 
         if (state !== "registered" && state !== "stopped") {
           throw new Error(`Module "${id}" is not in the registered state.`);
         }
+      }
 
+      const initialized: string[] = [];
+      this.controller = new AbortController();
+
+      for (const id of order) {
+        const module = this.registry.get(id)!;
         this.registry.setState(id, "initializing");
 
         try {
@@ -106,7 +110,9 @@ export class KbLifecycleManager {
           try {
             await module.stop?.(cleanupContext);
             this.registry.setState(id, "stopped");
+            this.cleanupTargets.delete(id);
           } catch (cleanupError) {
+            this.cleanupTargets.set(id, "stopped");
             failures.push(
               new Error(`Failed to clean up module "${id}".`, {
                 cause: cleanupError
@@ -120,8 +126,10 @@ export class KbLifecycleManager {
             try {
               await rollbackModule.stop?.(cleanupContext);
               this.registry.setState(rollbackId, "stopped");
+              this.cleanupTargets.delete(rollbackId);
             } catch (rollbackError) {
               this.registry.setState(rollbackId, "failed");
+              this.cleanupTargets.set(rollbackId, "stopped");
               failures.push(
                 new Error(`Failed to roll back module "${rollbackId}".`, {
                   cause: rollbackError
@@ -150,16 +158,18 @@ export class KbLifecycleManager {
 
     try {
       const order = this.resolveOrder();
+
+      for (const id of order) {
+        if (this.registry.getState(id) !== "initialized") {
+          throw new Error(`Module "${id}" is not initialized.`);
+        }
+      }
+
       const started: string[] = [];
       const cleanupContext = this.context(new AbortController());
 
       for (const id of order) {
         const module = this.registry.get(id)!;
-
-        if (this.registry.getState(id) !== "initialized") {
-          throw new Error(`Module "${id}" is not initialized.`);
-        }
-
         this.registry.setState(id, "starting");
 
         try {
@@ -178,7 +188,9 @@ export class KbLifecycleManager {
           try {
             await module.stop?.(cleanupContext);
             this.registry.setState(id, "initialized");
+            this.cleanupTargets.delete(id);
           } catch (cleanupError) {
+            this.cleanupTargets.set(id, "stopped");
             failures.push(
               new Error(`Failed to clean up module "${id}".`, {
                 cause: cleanupError
@@ -192,8 +204,10 @@ export class KbLifecycleManager {
             try {
               await rollbackModule.stop?.(cleanupContext);
               this.registry.setState(rollbackId, "initialized");
+              this.cleanupTargets.delete(rollbackId);
             } catch (rollbackError) {
               this.registry.setState(rollbackId, "failed");
+              this.cleanupTargets.set(rollbackId, "stopped");
               failures.push(
                 new Error(`Failed to roll back module "${rollbackId}".`, {
                   cause: rollbackError
@@ -231,16 +245,24 @@ export class KbLifecycleManager {
       for (const id of order) {
         const state = this.registry.getState(id);
 
-        if (state !== "running" && state !== "initialized" && state !== "failed") continue;
+        const shouldStop =
+          state === "running" ||
+          state === "initialized" ||
+          (state === "failed" && this.cleanupTargets.has(id));
+
+        if (!shouldStop) continue;
 
         const module = this.registry.get(id)!;
+        const targetState = state === "failed" ? this.cleanupTargets.get(id)! : "stopped";
         this.registry.setState(id, "stopping");
 
         try {
           await module.stop?.(cleanupContext);
-          this.registry.setState(id, "stopped");
+          this.registry.setState(id, targetState);
+          this.cleanupTargets.delete(id);
         } catch (error) {
           this.registry.setState(id, "failed");
+          this.cleanupTargets.set(id, "stopped");
           failures.push(
             new Error(`Failed to stop module "${id}".`, {
               cause: error
@@ -260,4 +282,3 @@ export class KbLifecycleManager {
     }
   }
 }
-
