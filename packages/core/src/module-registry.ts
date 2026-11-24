@@ -13,7 +13,7 @@ const ALLOWED_TRANSITIONS: Readonly<Record<ModuleState, readonly ModuleState[]>>
   running: ["stopping", "initialized", "failed"],
   stopping: ["stopped", "failed"],
   stopped: ["initializing", "stopping"],
-  failed: ["stopped", "initialized"]
+  failed: ["stopped", "initialized", "stopping"]
 };
 
 export class KbModuleRegistry implements ModuleRegistry {
@@ -145,4 +145,5 @@ export class KbModuleRegistry implements ModuleRegistry {
     return this.modules.size;
   }
 }
+
 

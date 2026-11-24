@@ -744,3 +744,62 @@ test("Core: khóa khởi động khi shutdown lỗi và cho phép retry", async 
 });
 
 
+
+test("Lifecycle: retry cleanup module sau khi stop thất bại", async () => {
+  const core = new KBVerseCore();
+  let attempts = 0;
+
+  core.register({
+    id: "unstable-stop",
+    version: "1.0.0",
+    stop() {
+      attempts++;
+      if (attempts === 1) throw new Error("Temporary stop failure");
+    }
+  });
+
+  await core.initialize();
+  await core.start();
+
+  await assert.rejects(core.stop(), /Core shutdown failed/);
+  assert.equal(core.modules.getState("unstable-stop"), "failed");
+  assert.equal(core.isStopping, true);
+
+  await core.stop();
+
+  assert.equal(attempts, 2);
+  assert.equal(core.modules.getState("unstable-stop"), "stopped");
+  assert.equal(core.isInitialized, false);
+  assert.equal(core.isStopping, false);
+});
+
+test("Core: từ chối hai lệnh shutdown chạy đồng thời", async () => {
+  const core = new KBVerseCore();
+  let releaseStop;
+
+  core.register({
+    id: "slow-stop",
+    version: "1.0.0",
+    stop: () => new Promise((resolve) => {
+      releaseStop = resolve;
+    })
+  });
+
+  await core.initialize();
+  await core.start();
+
+  const firstStop = core.stop();
+
+  await new Promise((resolve) => setImmediate(resolve));
+
+  await assert.rejects(
+    core.stop(),
+    /already in progress/i
+  );
+
+  releaseStop();
+  await firstStop;
+
+  assert.equal(core.isInitialized, false);
+  assert.equal(core.isStopping, false);
+});

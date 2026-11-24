@@ -24,7 +24,8 @@ export class KBVerseCore implements CoreContext {
 
   private initialized = false;
   private started = false;
-  private stopping = false;
+  private shutdownPending = false;
+  private shutdownInProgress = false;
 
   constructor() {
     this.lifecycle = new KbLifecycleManager(this.modules, this);
@@ -35,7 +36,7 @@ export class KBVerseCore implements CoreContext {
   }
 
   register(module: CoreModule): void {
-    if (this.stopping) {
+    if (this.shutdownPending || this.shutdownInProgress) {
       throw new Error("Cannot register modules while core shutdown is incomplete.");
     }
 
@@ -47,7 +48,7 @@ export class KBVerseCore implements CoreContext {
   }
 
   async initialize(): Promise<void> {
-    if (this.stopping) {
+    if (this.shutdownPending || this.shutdownInProgress) {
       throw new Error("Cannot initialize core while shutdown is incomplete.");
     }
 
@@ -70,7 +71,7 @@ export class KBVerseCore implements CoreContext {
   }
 
   async start(): Promise<void> {
-    if (this.stopping) {
+    if (this.shutdownPending || this.shutdownInProgress) {
       throw new Error("Cannot start core while shutdown is incomplete.");
     }
 
@@ -96,47 +97,56 @@ export class KBVerseCore implements CoreContext {
   }
 
   async stop(): Promise<void> {
-    if (!this.initialized) return;
+    if (!this.initialized && !this.shutdownPending) return;
 
-    this.stopping = true;
-
-    const failures: unknown[] = [];
-    let lifecycleStopped = false;
-
-    const cleanupSteps = [
-      () => this.tasks.shutdown(),
-      () => this.resources.releaseAll(),
-      async () => {
-        await this.lifecycle.stopAll();
-        lifecycleStopped = true;
-      }
-    ];
-
-    for (const cleanup of cleanupSteps) {
-      try {
-        await cleanup();
-      } catch (error) {
-        failures.push(error);
-      }
+    if (this.shutdownInProgress) {
+      throw new Error("Core shutdown is already in progress.");
     }
 
-    if (lifecycleStopped) {
+    this.shutdownInProgress = true;
+    this.shutdownPending = true;
+
+    try {
+      const failures: unknown[] = [];
+      let lifecycleStopped = false;
+
+      const cleanupSteps = [
+        () => this.tasks.shutdown(),
+        () => this.resources.releaseAll(),
+        async () => {
+          await this.lifecycle.stopAll();
+          lifecycleStopped = true;
+        }
+      ];
+
+      for (const cleanup of cleanupSteps) {
+        try {
+          await cleanup();
+        } catch (error) {
+          failures.push(error);
+        }
+      }
+
+      if (lifecycleStopped) {
+        this.started = false;
+      }
+
+      if (failures.length > 0) {
+        const error = new AggregateError(failures, "Core shutdown failed.");
+        this.errors.report(error, {
+          severity: "error",
+          source: "core:shutdown"
+        });
+        throw error;
+      }
+
       this.started = false;
+      this.initialized = false;
+      this.shutdownPending = false;
+      this.events.emit("core:stopped");
+    } finally {
+      this.shutdownInProgress = false;
     }
-
-    if (failures.length > 0) {
-      const error = new AggregateError(failures, "Core shutdown failed.");
-      this.errors.report(error, {
-        severity: "error",
-        source: "core:shutdown"
-      });
-      throw error;
-    }
-
-    this.started = false;
-    this.initialized = false;
-    this.stopping = false;
-    this.events.emit("core:stopped");
   }
 
   get isInitialized(): boolean {
@@ -148,6 +158,6 @@ export class KBVerseCore implements CoreContext {
   }
 
   get isStopping(): boolean {
-    return this.stopping;
+    return this.shutdownInProgress || this.shutdownPending;
   }
 }

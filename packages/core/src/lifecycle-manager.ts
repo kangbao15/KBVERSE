@@ -231,7 +231,7 @@ export class KbLifecycleManager {
       for (const id of order) {
         const state = this.registry.getState(id);
 
-        if (state !== "running" && state !== "initialized") continue;
+        if (state !== "running" && state !== "initialized" && state !== "failed") continue;
 
         const module = this.registry.get(id)!;
         this.registry.setState(id, "stopping");
@@ -260,3 +260,4 @@ export class KbLifecycleManager {
     }
   }
 }
+
